@@ -7,6 +7,7 @@
 <!-- chess.js 0.10.3 (CDNJS) + TensorFlow.js 4.10.0 (jsDelivr). Board access goes through boardOf(), which uses game.board() when present. -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   :root{--bg:#161512;--panel:#262421;--line:#3d3a36;--ink:#e8e6e1;--mute:#a09b93;--accent:#81b64c;--good:#81b64c;--bad:#ff8a80}
   *{box-sizing:border-box}
@@ -151,6 +152,13 @@
   .inrow button{white-space:nowrap}
   .gymbtn{width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;text-align:left;white-space:normal}
   .badge{min-width:24px;padding:1px 8px;border-radius:12px;background:#10190a;color:var(--accent);font-weight:700;text-align:center}
+  #syncBox{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid var(--line);border-radius:6px}
+  #syncBox h2{margin:0}
+  #syncBox input{width:100%;padding:7px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:5px;font:inherit}
+  #syncAccount{display:flex;flex-direction:column;gap:8px}
+  #syncEmail{overflow-wrap:anywhere;font-size:13px}
+  #syncStatus{min-height:16px;color:var(--mute);font-size:12px}
+  #syncStatus.bad{color:var(--bad)}#syncStatus.ok{color:var(--good)}
   @media (max-width:1180px){
     body{grid-template-columns:300px minmax(0,1fr)}
     #right{grid-column:1/-1;position:static;max-height:none;border-left:0;border-top:1px solid var(--line);display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));align-items:start}
@@ -167,6 +175,27 @@
 <body>
 <!-- LEFT: modes, setup, sliders, training aids -->
 <aside id="left">
+  <section id="syncBox" aria-label="Supabase account and sync">
+    <h2>Cloud Sync</h2>
+    <form id="syncAuth">
+      <label for="syncEmailInput">Email</label>
+      <input id="syncEmailInput" type="email" autocomplete="email" required>
+      <label for="syncPasswordInput">Password</label>
+      <input id="syncPasswordInput" type="password" autocomplete="current-password" required>
+      <div class="row small">
+        <button type="submit" id="syncSignIn">Đăng nhập</button>
+        <button type="button" class="ghost" id="syncSignUp">Đăng ký</button>
+      </div>
+    </form>
+    <div id="syncAccount" hidden>
+      <span id="syncEmail"></span>
+      <div class="row small">
+        <button type="button" id="syncNow">Đồng bộ ngay</button>
+        <button type="button" class="ghost" id="syncSignOut">Đăng xuất</button>
+      </div>
+    </div>
+    <div id="syncStatus" role="status" aria-live="polite">Ngoại tuyến · dữ liệu lưu trên thiết bị</div>
+  </section>
   <h1>Adaptive Chess Studio</h1>
   <div class="tabs" role="tablist" aria-label="Mode">
     <button id="tabStd" role="tab" aria-selected="true">Standard Match</button>
@@ -351,10 +380,18 @@ const VAL = { p: 100, n: 320, b: 330, r: 500, q: 900, k: 0 };
 const MODEL_KEY = 'indexeddb://adaptive-chess-brain';
 const META_KEY = 'adaptive-chess-meta', HIST_KEY = 'adaptive-chess-history', TELE_KEY = 'adaptive-chess-telemetry';
 const SOUND_KEY = 'adaptive-chess-sound', SETUP_KEY = 'adaptive-chess-setup', CUSTOM_KEY = 'adaptive-chess-custom-openings';
+const HEAT_KEY = 'adaptive-chess-error-heatmap';
 const REPLAY_KEY = 'adaptive-chess-experience-replay', REPLAY_LIMIT = 200, REPLAY_BATCH = 32;
 const MAX_HIST = 10, MAX_CUSTOM = 30;
 const BASE_ELO = 750, HUMAN_ELO = 800, ELO_K = 32;       // bot start rating / assumed human rating / Elo K-factor
 const BRAIN_KIND = 'adaptive-chess-brain';               // tag stored inside exported model files
+const SUPABASE_URL = 'https://supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_ZKAj7t1hfSNiG0XDrnJdsg_MnWNRw-A';
+let supabaseClient = null, supabaseInitError = null, syncUser = null, syncBusy = false, syncAgain = false, syncTimer = 0;
+try {
+  if (window.supabase && typeof window.supabase.createClient === 'function')
+    supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+} catch (e) { supabaseInitError = e; }
 // One-hot channel of each piece inside a square's 12-slot slice: P N B R Q K (White) then p n b r q k (Black).
 const CHANNEL = { w: { p: 0, n: 1, b: 2, r: 3, q: 4, k: 5 }, b: { p: 6, n: 7, b: 8, r: 9, q: 10, k: 11 } };
 const BADGES = {                                          // move-classification badges (t = glyph, c = colour)
@@ -417,11 +454,7 @@ function parseMoves(text) {
 }
 try {                                                      // load custom openings (re-validated: storage may have been edited)
   const a = JSON.parse(localStorage.getItem(CUSTOM_KEY));
-  if (Array.isArray(a)) a.slice(0, MAX_CUSTOM).forEach(o => {
-    if (!o || typeof o.name !== 'string' || !/^c\d+$/.test(o.id) || !['w', 'b'].includes(o.side) || !Array.isArray(o.moves)) return;
-    const p = parseMoves(o.moves.join(' '));
-    if (p.moves) customOps.push({ id: o.id, name: o.name.slice(0, 40), category: 'Custom', side: o.side, moves: p.moves, description: String(o.description || '').slice(0, 160), custom: true });
-  });
+  customOps = cleanCustomOpenings(a);
 } catch (e) {}
 
 // Endgame drills: you are White and must reach the goal before your clock runs out.
@@ -1112,7 +1145,7 @@ async function finish(result, method) {
     : 'A draw. Recording every pawn structure for next time.');
   if (!lite) recordGame(result, method);
   render();                                                // `over` unlocks the evaluation bar and every badge
-  if (drillGame || lite) { history = []; renderGauntlet(); return; }   // drills / book drills teach the brain nothing and do not move Elo or the streak
+  if (drillGame || lite) { history = []; renderGauntlet(); requestSync(); return; }   // drills / book drills teach the brain nothing and do not move Elo or the streak
   training = true;
   let r = null;
   try { r = await trainOnOpponentMoves({ positions: history, result, human }); }
@@ -1126,6 +1159,7 @@ async function finish(result, method) {
   log(r ? `Learned from ${r.n} positions. ${r.tactics} tactic(s) exploited. fit() loss ${r.first.toFixed(3)} to ${r.last.toFixed(3)}. Weights shifted ${r.shift.toFixed(2)}%.`
         : 'Game too short to learn from.');
   render();
+  requestSync();
 }
 
 function newGame() {
@@ -1224,7 +1258,7 @@ function tosOf(h) {                                        // destination square
 }
 
 // Error Heatmap: for the player's own moves rated Mistake (1 point) or Blunder (2 points), count the destination squares.
-function renderHeat() {
+function errorHeatmap() {
   const c = {};
   for (const h of hist) {
     const t = tosOf(h), mine = h.side === 'w' ? 0 : 1;
@@ -1233,7 +1267,12 @@ function renderHeat() {
       if (i % 2 === mine && t[i] && (k === 'mistake' || k === 'blunder')) c[t[i]] = (c[t[i]] || 0) + (k === 'blunder' ? 2 : 1);
     });
   }
+  return c;
+}
+function renderHeat() {
+  const c = errorHeatmap();
   const max = Math.max(1, ...Object.values(c));
+  store(HEAT_KEY, c);
   for (const d of $('heat').children) {
     const n = c[d.dataset.sq] || 0;
     d.style.boxShadow = n ? `inset 0 0 0 40px rgba(255,60,60,${(0.25 + 0.7 * n / max).toFixed(2)})` : 'none';
@@ -1668,6 +1707,18 @@ function persistCustom() {
     return true;
   } catch (e) { return false; }
 }
+function cleanCustomOpenings(a) {
+  const out = [];
+  if (!Array.isArray(a)) return out;
+  a.slice(0, MAX_CUSTOM).forEach(o => {
+    if (!o || typeof o.name !== 'string' || typeof o.id !== 'string' || !/^c\d+$/.test(o.id) ||
+        !['w', 'b'].includes(o.side) || !Array.isArray(o.moves)) return;
+    const p = parseMoves(o.moves.join(' '));
+    if (p.moves) out.push({ id: o.id, name: o.name.slice(0, 40), category: 'Custom', side: o.side,
+      moves: p.moves, description: String(o.description || '').slice(0, 160), custom: true });
+  });
+  return out;
+}
 function setCErr(msg, ok) { const el = $('cErr'); el.textContent = msg; el.className = ok ? 'ok' : 'bad'; }
 
 function addCustom(name, side, note, text) {               // shared by the form and the board recorder; returns '' or an error message
@@ -1678,6 +1729,7 @@ function addCustom(name, side, note, text) {               // shared by the form
   customOps.push({ id: 'c' + Date.now(), name, category: 'Custom', side, moves: p.moves, description: note.slice(0, 160) || 'Your own line.', custom: true });
   if (!persistCustom()) { customOps.pop(); return 'Could not save: browser storage is full or blocked.'; }
   renderOpeningSelect(); syncSetup();
+  requestSync();
   return '';
 }
 function saveCustomOpening() {                             // the manual form: validate with a temporary Chess instance, then store
@@ -1690,6 +1742,7 @@ function saveCustomOpening() {                             // the manual form: v
 }
 function deleteCustom(id) {
   customOps = customOps.filter(o => o.id !== id); persistCustom();
+  requestSync();
   if (ui.opening === id) { ui.opening = 'italian'; store(SETUP_KEY, ui); }
   renderOpeningSelect(); syncSetup(); renderVault();
 }
@@ -1871,7 +1924,180 @@ $('gymBtn').onclick = enterGym;
 $('gymSkip').onclick = () => { if (gym && !gym.done) gymNext(); };
 $('gymExit').onclick = exitGym;
 
+function syncMessage(message, kind) {
+  const el = $('syncStatus');
+  el.textContent = message;
+  el.className = kind || '';
+}
+function syncControls() {
+  $('syncAuth').hidden = !!syncUser;
+  $('syncAccount').hidden = !syncUser;
+  $('syncEmail').textContent = syncUser ? syncUser.email : '';
+  $('syncSignIn').disabled = $('syncSignUp').disabled = $('syncSignOut').disabled = syncBusy;
+  $('syncNow').disabled = !syncUser || syncBusy;
+}
+function releaseSync() {
+  syncBusy = false; syncControls();
+  if (syncAgain) {
+    syncAgain = false;
+    if (syncUser) requestSync();
+  }
+}
+function syncRow() {
+  return {
+    user_id: syncUser.id,
+    bot_elo: tele.elo,
+    win_streak: tele.streak,
+    match_history: hist,
+    error_heatmap: errorHeatmap(),
+    custom_openings: customOps.map(o => ({ id: o.id, name: o.name, side: o.side, moves: o.moves, description: o.description })),
+    loss_history: tele.losses
+  };
+}
+async function writeSyncRow() {
+  const userId = syncUser && syncUser.id;
+  if (!supabaseClient || !userId) return false;
+  const { error } = await supabaseClient.from('chess_sync').upsert(syncRow(), { onConflict: 'user_id' });
+  if (error) throw error;
+  return true;
+}
+async function pushSync() {
+  if (!syncUser) { syncMessage('Ngoại tuyến · dữ liệu lưu trên thiết bị', ''); return; }
+  if (!supabaseClient) { syncMessage('Không tải được Supabase · dữ liệu cục bộ được giữ', 'bad'); return; }
+  if (syncBusy) { syncAgain = true; return; }
+  if (navigator.onLine === false) { syncMessage('Ngoại tuyến · sẽ đồng bộ khi có mạng', ''); return; }
+  syncBusy = true; syncControls(); syncMessage('Đang đồng bộ…', '');
+  const userId = syncUser.id;
+  try {
+    await writeSyncRow();
+    if (syncUser && syncUser.id === userId) syncMessage('Đã đồng bộ với Supabase', 'ok');
+  } catch (e) {
+    if (syncUser && syncUser.id === userId) syncMessage('Đồng bộ thất bại; dữ liệu cục bộ được giữ: ' + e.message, 'bad');
+  } finally {
+    releaseSync();
+  }
+}
+function requestSync() {
+  if (!syncUser) return;
+  if (syncBusy) { syncAgain = true; return; }
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(pushSync, 350);
+}
+function cleanHeatmap(value) {
+  const out = {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return out;
+  Object.keys(value).forEach(sq => {
+    if (/^[a-h][1-8]$/.test(sq) && num(value[sq]) && value[sq] > 0) out[sq] = Math.floor(value[sq]);
+  });
+  return out;
+}
+function applySyncRow(row) {
+  const remoteHist = Array.isArray(row.match_history) ? row.match_history : [];
+  store(HIST_KEY, remoteHist);
+  hist = loadHist();
+  tele = cleanTele(Object.assign({}, tele, {
+    elo: row.bot_elo, streak: row.win_streak, losses: Array.isArray(row.loss_history) ? row.loss_history : []
+  }));
+  store(TELE_KEY, tele);
+  store(HEAT_KEY, cleanHeatmap(row.error_heatmap));
+  customOps = cleanCustomOpenings(row.custom_openings);
+  store(CUSTOM_KEY, customOps.map(o => ({ id: o.id, name: o.name, side: o.side, moves: o.moves, description: o.description })));
+  if (!findOpening(ui.opening)) { ui.opening = 'italian'; store(SETUP_KEY, ui); }
+  renderOpeningSelect(); syncSetup(); renderHist(); renderTele(); refreshGym();
+  if (G) render();
+}
+async function pullSync() {
+  if (!syncUser || !supabaseClient) return;
+  if (syncBusy) return;
+  if (navigator.onLine === false) { syncMessage('Ngoại tuyến · đang dùng dữ liệu cục bộ', ''); return; }
+  syncBusy = true; syncControls(); syncMessage('Đang tải dữ liệu…', '');
+  const userId = syncUser.id;
+  try {
+    const { data, error } = await supabaseClient.from('chess_sync')
+      .select('bot_elo,win_streak,match_history,error_heatmap,custom_openings,loss_history')
+      .eq('user_id', userId).maybeSingle();
+    if (error) throw error;
+    if (!syncUser || syncUser.id !== userId) return;
+    if (data) {
+      applySyncRow(data);
+      syncMessage('Dữ liệu đã tải từ Supabase', 'ok');
+    } else {
+      await writeSyncRow();
+      syncMessage('Đã tạo bản đồng bộ đầu tiên', 'ok');
+    }
+  } catch (e) {
+    if (syncUser && syncUser.id === userId) syncMessage('Không tải được dữ liệu; dữ liệu cục bộ được giữ: ' + e.message, 'bad');
+  } finally {
+    releaseSync();
+  }
+}
+function setSyncSession(session, pull) {
+  const previousId = syncUser && syncUser.id;
+  syncUser = session && session.user ? session.user : null;
+  syncControls();
+  if (!syncUser) syncMessage('Ngoại tuyến · dữ liệu lưu trên thiết bị', '');
+  else if (pull && syncUser.id !== previousId) setTimeout(pullSync, 0);
+}
+async function initSync() {
+  syncControls();
+  if (!supabaseClient) {
+    syncMessage('Supabase không khả dụng' + (supabaseInitError ? ': ' + supabaseInitError.message : ' · ứng dụng vẫn chạy ngoại tuyến'), supabaseInitError ? 'bad' : '');
+    return;
+  }
+  try {
+    const { data, error } = await supabaseClient.auth.getSession();
+    if (error) syncMessage('Không thể khôi phục phiên: ' + error.message, 'bad');
+    else setSyncSession(data.session, true);
+    supabaseClient.auth.onAuthStateChange((event, session) => {
+      setTimeout(() => setSyncSession(session, event === 'SIGNED_IN'), 0);
+    });
+  } catch (e) { syncMessage('Không thể khôi phục phiên: ' + e.message, 'bad'); }
+}
+$('syncAuth').addEventListener('submit', async e => {
+  e.preventDefault();
+  if (!supabaseClient) { syncMessage('Supabase CDN không khả dụng; kiểm tra kết nối rồi tải lại trang.', 'bad'); return; }
+  syncBusy = true; syncControls(); syncMessage('Đang đăng nhập…', '');
+  try {
+    const { data, error } = await supabaseClient.auth.signInWithPassword({
+      email: $('syncEmailInput').value.trim(), password: $('syncPasswordInput').value
+    });
+    if (error) throw error;
+    setSyncSession(data.session, true);
+    syncMessage('Đăng nhập thành công', 'ok');
+  } catch (e) { syncMessage('Đăng nhập thất bại: ' + e.message, 'bad'); }
+  finally { releaseSync(); }
+});
+$('syncSignUp').onclick = async () => {
+  if (!supabaseClient) { syncMessage('Supabase CDN không khả dụng; kiểm tra kết nối rồi tải lại trang.', 'bad'); return; }
+  syncBusy = true; syncControls(); syncMessage('Đang tạo tài khoản…', '');
+  try {
+    const { data, error } = await supabaseClient.auth.signUp({
+      email: $('syncEmailInput').value.trim(), password: $('syncPasswordInput').value
+    });
+    if (error) throw error;
+    if (data.session) {
+      setSyncSession(data.session, true);
+      syncMessage('Đăng ký thành công', 'ok');
+    } else syncMessage('Đăng ký thành công. Hãy xác nhận email để đăng nhập.', 'ok');
+  } catch (e) { syncMessage('Đăng ký thất bại: ' + e.message, 'bad'); }
+  finally { releaseSync(); }
+};
+$('syncNow').onclick = pushSync;
+$('syncSignOut').onclick = async () => {
+  if (!supabaseClient) return;
+  syncBusy = true; syncControls();
+  try {
+    const { error } = await supabaseClient.auth.signOut();
+    if (error) throw error;
+    setSyncSession(null, false);
+    syncMessage('Đã đăng xuất · dữ liệu cục bộ được giữ', 'ok');
+  } catch (e) { syncMessage('Đăng xuất thất bại: ' + e.message, 'bad'); }
+  finally { releaseSync(); }
+};
+window.addEventListener('online', requestSync);
+
 (async function init() {
+  initSync();
   $('aggr').value = ui.aggr; $('nodes').value = ui.nodes; $('lr').value = ui.lr; syncSliders(); renderOpeningSelect(); syncSetup();
   hist = loadHist(); renderHist(); renderTele(); refreshGym();
   if (typeof tf === 'undefined' || typeof Chess === 'undefined') {
