@@ -1,0 +1,1894 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Adaptive Chess Studio</title>
+<!-- chess.js 0.10.3 (CDNJS) + TensorFlow.js 4.10.0 (jsDelivr). Board access goes through boardOf(), which uses game.board() when present. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
+<style>
+  :root{--bg:#161512;--panel:#262421;--line:#3d3a36;--ink:#e8e6e1;--mute:#a09b93;--accent:#81b64c;--good:#81b64c;--bad:#ff8a80}
+  *{box-sizing:border-box}
+  [hidden]{display:none!important}
+  body{margin:0;min-height:100vh;display:grid;grid-template-columns:300px minmax(0,1fr) 330px;background:var(--bg);color:var(--ink);font:14px/1.45 "Segoe UI",system-ui,sans-serif}
+  aside{padding:20px;background:var(--panel);display:flex;flex-direction:column;gap:14px;position:sticky;top:0;align-self:start;max-height:100vh;overflow-y:auto}
+  #left{border-right:1px solid var(--line)}#right{border-left:1px solid var(--line)}
+  h1{margin:0;font:600 22px "Palatino Linotype",Georgia,serif;color:var(--accent)}
+  h2{margin:0 0 6px;font:600 15px "Palatino Linotype",Georgia,serif;color:var(--accent)}
+  .sub{margin:0;color:var(--mute);font-size:12px}
+  label{display:block;font-weight:600}
+  label b{float:right;color:var(--accent);font-weight:600}
+  label small{display:block;font-weight:400;color:var(--mute)}
+  input[type=range]{width:100%;accent-color:var(--accent);margin:6px 0 0}
+  button{padding:9px 12px;border:1px solid var(--accent);border-radius:6px;background:var(--accent);color:#10190a;font:600 14px "Segoe UI",sans-serif;cursor:pointer}
+  button.ghost{background:transparent;color:var(--ink);border-color:var(--line)}
+  button.sm{padding:5px 8px;font-size:12px}
+  button:disabled{opacity:.4;cursor:default}
+  button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #fff;outline-offset:2px}
+  .row{display:flex;gap:8px}.row button{flex:1;padding:9px 6px}
+  .row.small button{font-size:12px;padding:7px 4px}
+  .chk{display:flex;gap:8px;align-items:center;font-weight:400;color:var(--ink);margin:0}
+  .chk small{display:inline;color:var(--mute)}
+  .box{padding:12px 14px;border:1px solid var(--line);border-radius:6px}
+  /* Mode tabs + setup */
+  .tabs{display:grid;grid-template-columns:repeat(2,1fr);border-bottom:1px solid var(--line)}
+  .tabs button{background:transparent;border:0;border-bottom:3px solid transparent;border-radius:0;color:var(--mute);padding:8px 2px;font-size:12px}
+  .tabs button[aria-selected=true]{color:var(--accent);border-bottom-color:var(--accent)}
+  #setup{display:flex;flex-direction:column;gap:10px}
+  .seg{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid var(--line);border-radius:6px;overflow:hidden}
+  .seg label{position:relative;margin:0;font-size:12px;text-align:center;cursor:pointer}
+  .seg input{position:absolute;opacity:0;pointer-events:none}
+  .seg span{display:block;padding:8px 4px;color:var(--mute)}
+  .seg input:checked + span{background:var(--accent);color:#10190a}
+  .seg input:focus-visible + span{outline:2px solid #fff;outline-offset:-2px}
+  select{width:100%;padding:8px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:6px;font:inherit}
+  select option,select optgroup{background:#262421;color:#e8e6e1}
+  /* Right column: thought log, telemetry, heatmap, history */
+  #thoughtBox{border-left:3px solid var(--accent)}
+  #thought{margin:0;min-height:42px;font-style:italic}
+  #thought.flash{animation:fade .5s ease}
+  @keyframes fade{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
+  .tele{display:grid;grid-template-columns:1fr 1fr;gap:8px 12px}
+  .tele .wide{grid-column:1/-1}
+  .tele .k{display:block;color:var(--mute);font-size:12px}
+  .tele b{font:600 20px "Segoe UI",sans-serif;font-variant-numeric:tabular-nums}
+  .tele small{margin-left:6px;font-size:12px}
+  .up{color:var(--good)}.dn{color:var(--bad)}.flat{color:var(--mute)}
+  #spark{display:block;width:100%;height:44px;margin-top:4px}
+  #brain{margin-top:8px;color:var(--mute);font-size:12px}
+  #heat{display:grid;grid-template-columns:repeat(8,1fr);width:100%;max-width:240px;aspect-ratio:1;gap:1px;background:var(--line);border:1px solid var(--line);margin-bottom:6px}
+  #heat div{background:#2f2c28}#heat div.l{background:#3d3a36}
+  #hist{list-style:none;margin:0;padding:0;max-height:210px;overflow:auto}
+  #hist li{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)}
+  #hist li.on{background:rgba(129,182,76,.14)}
+  #hist .empty{display:block;color:var(--mute);border:0}
+  #hist.locked button{opacity:.35;pointer-events:none}
+  .res{min-width:46px;text-align:center;border-radius:10px;padding:1px 8px;font:600 12px "Segoe UI",sans-serif;color:#fff}
+  .res.Win{background:#5fa83a}.res.Loss{background:#d8352a}.res.Draw{background:#7d8da1}
+  .info{flex:1;font-size:13px}.info small{display:block;color:var(--mute)}
+  #log{overflow:auto;max-height:130px;color:var(--mute);font-size:13px}
+  #log p{margin:0 0 8px;padding-left:8px;border-left:2px solid var(--line)}
+  /* Centre: clocks, evaluation bar, CSS-grid board */
+  main{padding:20px;display:flex;justify-content:center;min-width:0}
+  .stage{width:min(704px,100%);display:flex;flex-direction:column;gap:8px}
+  .clock{margin-left:52px;display:flex;justify-content:space-between;padding:8px 14px;border-radius:6px;background:var(--panel);border:1px solid var(--line);font-variant-numeric:tabular-nums}
+  .clock.on{border-color:var(--accent)}.clock span:last-child{font:600 22px "Segoe UI",sans-serif}
+  .clock.low{color:var(--bad);border-color:var(--bad)}
+  .boardwrap{display:flex;gap:8px;align-items:stretch}
+  #grid{flex:1;min-width:0;aspect-ratio:1;display:grid;grid-template:repeat(8,1fr)/repeat(8,1fr);border-radius:4px;overflow:hidden;user-select:none;-webkit-user-select:none;touch-action:manipulation;align-self:flex-start}
+  .sq{position:relative;cursor:pointer}
+  .sq.l{background:#ebecd0}.sq.d{background:#739552}
+  .sq::before{content:'';position:absolute;inset:0;background:var(--t,transparent);pointer-events:none}
+  .t-last{--t:rgba(227,183,104,.5)}.t-sel{--t:rgba(120,220,160,.55)}.t-chk{--t:rgba(230,70,70,.65)}
+  .t-pre{--t:rgba(190,30,30,.55)}.t-warn{--t:rgba(255,150,0,.75)}
+  .sq svg.pc{position:absolute;left:4%;top:4%;width:92%;height:92%;pointer-events:none}
+  .sq.hint::after{content:'';position:absolute;left:36%;top:36%;width:28%;height:28%;border-radius:50%;background:rgba(20,32,46,.45);pointer-events:none}
+  .sq.cap::after{content:'';position:absolute;inset:6%;border-radius:50%;border:5px solid rgba(20,32,46,.55);pointer-events:none}
+  .sq.hang{outline:2px dashed rgba(255,70,70,.9);outline-offset:-4px}
+  .co{position:absolute;font:600 10px/1 "Segoe UI",sans-serif;pointer-events:none;font-style:normal}
+  .co.r{left:3px;top:3px}.co.f{right:3px;bottom:2px}
+  .sq.l .co{color:#739552}.sq.d .co{color:#ebecd0}
+  .mb{position:absolute;right:2px;top:2px;z-index:2;min-width:22px;height:22px;padding:0 3px;border-radius:11px;border:2px solid #fff;font:700 11px/18px "Segoe UI","Segoe UI Emoji",sans-serif;text-align:center;color:#fff;box-sizing:border-box}
+  #evalbar{position:relative;width:44px;flex:none;display:flex;flex-direction:column;border-radius:4px;overflow:hidden;box-shadow:0 0 0 1px var(--line);transition:opacity .3s}
+  #evalbar.flip{flex-direction:column-reverse}
+  #evalbar.locked{opacity:.4;filter:grayscale(1)}
+  #evB{flex:0 0 50%;background:#1a1d24;transition:flex-basis .45s ease}
+  #evW{flex:1 1 auto;background:#f1f3f5}
+  #evT{position:absolute;left:0;right:0;text-align:center;font:600 11px "Segoe UI",sans-serif}
+  #evT.dk{color:#1a1d24}#evT.lt{color:#f1f3f5}#evT.bot{bottom:4px}#evT.top{top:4px}
+  #reviewBar{margin-left:52px;display:flex;gap:8px;align-items:center}
+  #reviewBar button{min-width:44px}
+  #rvInfo{flex:1;text-align:center;color:var(--mute);font-variant-numeric:tabular-nums}
+  #statusRow{margin-left:52px;display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;min-height:26px}
+  #status{font-weight:600}
+  #lastBadge{padding:2px 10px;border-radius:12px;color:#fff;font-size:12px;font-weight:600}
+  #lastBadge:empty{display:none}
+  #moves{margin-left:52px;display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;font-size:13px}
+  #moves.rv .mv{cursor:pointer}
+  .mv.cur{background:rgba(129,182,76,.28);border-radius:4px;padding:0 4px}
+  .no{color:var(--mute)}
+  .bd{display:inline-block;min-width:17px;height:17px;margin-left:3px;padding:0 2px;border-radius:9px;text-align:center;font:700 10px/17px "Segoe UI","Segoe UI Emoji",sans-serif;font-style:normal;color:#fff}
+  /* Practice All Openings + Opening Vault + toast */
+  input[type=text]{width:100%;margin-top:4px;padding:8px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:6px;font:inherit;font-weight:400}
+  .bar{height:6px;border-radius:3px;background:var(--line);overflow:hidden}
+  .bar i{display:block;height:100%;width:0;background:var(--accent);transition:width .4s ease}
+  .gprog{font-weight:600;color:var(--accent)}
+  #gBox{display:flex;flex-direction:column;gap:8px}
+  #gNext{flex:2;white-space:normal}
+  .modal{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(0,0,0,.65)}
+  .panel{display:flex;flex-direction:column;width:min(980px,100%);max-height:calc(100vh - 32px);background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .phead{display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1px solid var(--line)}
+  .phead h2{margin:0;flex:1}.phead h2 .sub{font:400 12px "Segoe UI",sans-serif;margin-left:8px}
+  .pbody{overflow:auto;padding:16px 18px;display:flex;flex-direction:column;gap:16px}
+  .chips{display:flex;flex-wrap:wrap;gap:6px}
+  .chips button[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:#10190a}
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
+  .card{display:flex;flex-direction:column;gap:8px;padding:12px;background:var(--bg);border:1px solid var(--line);border-radius:8px;min-width:0}
+  .card header{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}
+  .tag{font-size:11px;color:var(--mute);white-space:nowrap}
+  .card code{font:12px/1.5 Consolas,"Courier New",monospace;color:#c3e29a;word-break:break-word}
+  .card p{margin:0;flex:1;color:var(--mute);font-size:13px}
+  .card .row button{white-space:normal;font-size:12px}
+  .cgrid{display:grid;grid-template-columns:2fr 1fr;gap:10px;margin-bottom:10px}
+  .cgrid .wide{grid-column:1/-1}.cgrid select{margin-top:4px}
+  #cErr{margin:8px 0 0;min-height:20px;font-size:13px}#cErr.ok{color:var(--good)}#cErr.bad{color:var(--bad)}
+  #toast{position:fixed;left:50%;bottom:24px;z-index:60;max-width:min(520px,calc(100vw - 32px));padding:10px 16px;border:1px solid var(--accent);border-radius:8px;background:var(--panel);color:var(--ink);font-weight:600;text-align:center;box-shadow:0 8px 24px rgba(0,0,0,.45);opacity:0;pointer-events:none;transform:translate(-50%,16px);transition:opacity .25s,transform .25s}
+  #toast.on{opacity:1;transform:translate(-50%,0)}
+  /* Move pressure, recorder / gym bars, gym button */
+  #pressure{margin-top:-4px;display:flex;align-items:center;gap:8px}
+  #pressure .bar{flex:1;height:8px}
+  #pBar{transition:width .1s linear,background .2s}
+  #pTxt{min-width:56px;text-align:right;font-size:12px;color:var(--mute);font-variant-numeric:tabular-nums}
+  #grid{transition:box-shadow .15s}
+  #grid.slow{box-shadow:0 0 0 4px #ff9800,0 0 22px rgba(255,152,0,.85)}
+  .t-ok{--t:rgba(60,200,90,.7)}.t-bad{--t:rgba(235,60,60,.72)}
+  .modebar{margin-left:52px;display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--accent);border-radius:6px;background:var(--panel)}
+  .modebar input[type=text]{width:auto;flex:1 1 130px;margin:0}
+  .modebar select{width:auto}
+  .inrow{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+  .inrow input{flex:1 1 180px;margin-top:4px}
+  .inrow button{white-space:nowrap}
+  .gymbtn{width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;text-align:left;white-space:normal}
+  .badge{min-width:24px;padding:1px 8px;border-radius:12px;background:#10190a;color:var(--accent);font-weight:700;text-align:center}
+  @media (max-width:1180px){
+    body{grid-template-columns:300px minmax(0,1fr)}
+    #right{grid-column:1/-1;position:static;max-height:none;border-left:0;border-top:1px solid var(--line);display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));align-items:start}
+  }
+  @media (max-width:760px){
+    body{display:block}
+    aside{position:static;max-height:none;border:0}
+    main{padding:12px}
+  }
+  @media (max-width:520px){.cgrid{grid-template-columns:1fr}}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<!-- LEFT: modes, setup, sliders, training aids -->
+<aside id="left">
+  <h1>Adaptive Chess Studio</h1>
+  <div class="tabs" role="tablist" aria-label="Mode">
+    <button id="tabStd" role="tab" aria-selected="true">Standard Match</button>
+    <button id="tabTrn" role="tab" aria-selected="false">Opening &amp; Traps</button>
+    <button id="tabDrl" role="tab" aria-selected="false">Endgame Drills</button>
+    <button id="tabVlt" role="tab" aria-selected="false" aria-haspopup="dialog" title="Opening Vault">📖 Kho Khai Cuộc</button>
+  </div>
+  <section id="setup">
+    <div id="sideBox">
+      <div class="seg" id="seg" role="radiogroup" aria-label="Play as">
+        <label><input type="radio" name="side" value="w"><span>Play as White</span></label>
+        <label><input type="radio" name="side" value="b"><span>Play as Black</span></label>
+        <label><input type="radio" name="side" value="r"><span>Random</span></label>
+      </div>
+    </div>
+    <div id="trainBox" hidden>
+      <label for="opening">Opening or gambit to drill</label>
+      <select id="opening"></select>
+      <p id="trainInfo" class="sub"></p>
+      <div id="gBox" hidden>
+        <div id="gProg" class="gprog"></div>
+        <div class="bar"><i id="gBar"></i></div>
+        <div class="row small"><button id="gNext">Next Opening (Khai cuộc tiếp theo)</button><button id="gShuf" class="ghost">Reshuffle</button></div>
+        <label class="chk"><input type="checkbox" id="gAuto"> <span>Auto-advance after 1.5 s</span></label>
+      </div>
+      <label class="chk"><input type="checkbox" id="pChk"> <span>Ép tốc độ 2.5s / nước (2.5s Move Pressure)</span></label>
+    </div>
+    <div id="drillBox" hidden>
+      <label for="drill">Endgame drill</label>
+      <select id="drill">
+        <option value="kr">King + Rook vs King (45 s)</option>
+        <option value="kq">King + Queen vs King (30 s)</option>
+        <option value="kp">King + Pawn promotion (45 s)</option>
+      </select>
+      <p id="drillInfo" class="sub"></p>
+    </div>
+    <div class="row"><button id="newGame">New game</button><button id="resign" class="ghost">Resign</button></div>
+  </section>
+  <label>Aggression Level <b id="vAggr"></b>
+    <small>Low: positional control. High: attacking pieces and king pressure.</small>
+    <input id="aggr" type="range" min="0" max="100" value="50"></label>
+  <label>Depth Limit (max nodes) <b id="vNodes"></b>
+    <small>Search budget per move. Lower is faster (about 0.2 s at 700).</small>
+    <input id="nodes" type="range" min="100" max="6000" step="100" value="700"></label>
+  <label>Learning Rate <b id="vLr"></b>
+    <small>How strongly each game changes the network.</small>
+    <input id="lr" type="range" min="1" max="100" value="10"></label>
+  <section id="aids" class="box">
+    <h2>Training Aids</h2>
+    <label class="chk"><input type="checkbox" id="radar"> <span>Hanging Piece Radar <small>dashed red = loose piece</small></span></label>
+    <label class="chk"><input type="checkbox" id="handi"> <span>Dynamic Handicap <small>3 wins in a row = stronger bot</small></span></label>
+    <label class="chk"><input type="checkbox" id="snd"> <span>Sound cues</span></label>
+  </section>
+  <p class="sub">Click during the bot's turn to premove (right-click or Esc cancels). Analysis stays hidden until the game ends.</p>
+</aside>
+
+<!-- CENTRE: clocks, evaluation bar, board -->
+<main>
+  <div class="stage">
+    <div id="recBar" class="modebar" hidden>
+      <b>🔴 Recording</b>
+      <input id="rName" type="text" maxlength="40" placeholder="Opening name" aria-label="Opening name">
+      <select id="rSide" aria-label="You play"><option value="w">You play White</option><option value="b">You play Black</option></select>
+      <input id="rLine" type="text" readonly placeholder="Play moves on the board (both sides)" aria-label="Recorded moves">
+      <button id="rUndo" class="ghost sm">Undo Last Move</button>
+      <button id="rSave" class="sm">Stop Recording &amp; Save</button>
+      <button id="rCancel" class="ghost sm">Cancel</button>
+    </div>
+    <div id="gymBar" class="modebar" hidden>
+      <b>🎯 Luyện Sửa Lỗi Sai</b><span id="gymInfo" class="sub"></span>
+      <button id="gymSkip" class="ghost sm">Skip</button>
+      <button id="gymExit" class="sm">Exit Gym</button>
+    </div>
+    <div class="clock" id="cBot"><span>Bot (Black)</span><span>3:00</span></div>
+    <div class="boardwrap">
+      <div id="evalbar" class="locked" role="meter" aria-label="Evaluation" aria-valuemin="-10" aria-valuemax="10" title="Evaluation unlocks when the game ends">
+        <div id="evB"></div><div id="evW"></div><span id="evT" class="dk bot">--</span>
+      </div>
+      <div id="grid" role="grid" aria-label="Chessboard"></div>
+    </div>
+    <div class="clock" id="cMe"><span>You (White)</span><span>3:00</span></div>
+    <div id="reviewBar" hidden>
+      <button id="rvPrev" aria-label="Previous move" title="Previous move (left arrow)">&lt; Previous</button>
+      <span id="rvInfo"></span>
+      <button id="rvNext" aria-label="Next move" title="Next move (right arrow)">Next &gt;</button>
+      <button id="rvBack" class="ghost">Back to Play</button>
+    </div>
+    <div id="statusRow"><span id="status"></span><span id="lastBadge"></span></div>
+    <div id="moves"></div>
+  </div>
+</main>
+
+<!-- RIGHT: thought log, telemetry, error heatmap, history -->
+<aside id="right">
+  <section id="thoughtBox" class="box" aria-live="polite">
+    <h2>Bot's Thought Log</h2>
+    <p id="thought"></p>
+  </section>
+  <div id="pressure" hidden aria-label="Move pressure timer"><div class="bar"><i id="pBar"></i></div><span id="pTxt"></span></div>
+  <section id="teleBox" class="box">
+    <h2>AI Evolution Telemetry</h2>
+    <div class="tele">
+      <div title="Bot rating after each game: standard Elo against an assumed 800-rated human (K = 32)">
+        <span class="k">Adaptive Elo</span><b id="tElo">750</b><small id="tEloD"></small>
+      </div>
+      <div title="Consecutive wins for you (standard and opening games)">
+        <span class="k">Win streak</span><b id="tStreak">0</b>
+      </div>
+      <div title="Loss of the last model.fit() run">
+        <span class="k">Training loss</span><b id="tLoss">--</b><small id="tLossD"></small>
+      </div>
+      <div title="Mean absolute weight change relative to the original weights after the last training run">
+        <span class="k">Weight shift</span><b id="tShift">--</b><small id="tState"></small>
+      </div>
+      <div class="wide"><canvas id="spark" width="480" height="88"></canvas></div>
+    </div>
+    <div id="brain"></div>
+    <div class="row small" style="margin-top:10px">
+      <button id="resetBrain" class="ghost">Reset Brain</button>
+      <button id="exportBrain" class="ghost" title="Download the trained weights (.json + .bin)">Export Brain</button>
+      <button id="importBrain" class="ghost" title="Load a .json + .bin pair exported earlier">Import Brain</button>
+    </div>
+    <input type="file" id="impFile" accept=".json,.bin" multiple hidden>
+  </section>
+  <section class="box">
+    <h2>Error Heatmap</h2>
+    <div id="heat" aria-label="Squares of your mistakes and blunders"></div>
+    <p class="sub">Squares where you played ? or ?? in your last 10 games (darker red = more errors).</p>
+    <button id="gymBtn" class="gymbtn" style="margin-top:10px"><span>🎯 Luyện Sửa Lỗi Sai (Personal Blunder Gym)</span><span id="gymBadge" class="badge">0</span></button>
+  </section>
+  <section id="histBox" class="box">
+    <h2>Match History</h2>
+    <ul id="hist"></ul>
+  </section>
+  <div id="log" aria-live="polite"></div>
+</aside>
+
+<!-- OPENING VAULT (Kho Khai Cuộc): filterable list, custom opening creator -->
+<div id="vault" class="modal" role="dialog" aria-modal="true" aria-labelledby="vTitle" hidden>
+  <div class="panel">
+    <header class="phead">
+      <h2 id="vTitle">Kho Khai Cuộc <span class="sub">Opening Vault</span></h2>
+      <span id="vCount" class="sub"></span>
+      <button id="vClose" class="ghost sm" aria-label="Close the Opening Vault">✕</button>
+    </header>
+    <div class="pbody">
+      <div id="vFilters" class="chips" role="group" aria-label="Filter openings">
+        <button class="ghost sm" data-f="all">All</button>
+        <button class="ghost sm" data-f="w">White Gambits</button>
+        <button class="ghost sm" data-f="b">Black Counter-Gambits</button>
+        <button class="ghost sm" data-f="custom">Custom Saved</button>
+      </div>
+      <div id="vGrid" class="cards"></div>
+      <section class="box">
+        <h2>Add your own opening</h2>
+        <div class="cgrid">
+          <label>Opening name<input id="cName" type="text" maxlength="40" placeholder="My favourite gambit"></label>
+          <label>You play<select id="cSide"><option value="w">White</option><option value="b">Black</option></select></label>
+          <div class="wide"><label for="cMoves">Moves in SAN</label>
+            <div class="inrow"><input id="cMoves" type="text" placeholder="e4 e5 Nf3 Nc6 Bc4"><button id="cRec" class="ghost sm" type="button">🔴 Ghi từ bàn cờ (Record on Board)</button></div></div>
+          <label class="wide">Notes<input id="cNote" type="text" maxlength="160" placeholder="Strategic goal, traps to remember"></label>
+        </div>
+        <div class="row"><button id="cAdd">Save opening</button></div>
+        <p id="cErr" role="alert"></p>
+      </section>
+    </div>
+  </div>
+</div>
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script>
+'use strict';
+/* =========================================================
+   1. CONFIG & GLOBAL STATE
+   ========================================================= */
+const P = { aggr: 50, nodes: 700, lr: 0.005 };           // live values of the three sliders
+const BLITZ_MS = 180000;                                  // 3-minute blitz per side
+const NN_SCALE = 300;                                     // centipawns the NN may add/subtract (NN output is -1..1)
+const MATE = 1e5;
+const FILES = 'abcdefgh';
+const VAL = { p: 100, n: 320, b: 330, r: 500, q: 900, k: 0 };
+const MODEL_KEY = 'indexeddb://adaptive-chess-brain';
+const META_KEY = 'adaptive-chess-meta', HIST_KEY = 'adaptive-chess-history', TELE_KEY = 'adaptive-chess-telemetry';
+const SOUND_KEY = 'adaptive-chess-sound', SETUP_KEY = 'adaptive-chess-setup', CUSTOM_KEY = 'adaptive-chess-custom-openings';
+const REPLAY_KEY = 'adaptive-chess-experience-replay', REPLAY_LIMIT = 200, REPLAY_BATCH = 32;
+const MAX_HIST = 10, MAX_CUSTOM = 30;
+const BASE_ELO = 750, HUMAN_ELO = 800, ELO_K = 32;       // bot start rating / assumed human rating / Elo K-factor
+const BRAIN_KIND = 'adaptive-chess-brain';               // tag stored inside exported model files
+// One-hot channel of each piece inside a square's 12-slot slice: P N B R Q K (White) then p n b r q k (Black).
+const CHANNEL = { w: { p: 0, n: 1, b: 2, r: 3, q: 4, k: 5 }, b: { p: 6, n: 7, b: 8, r: 9, q: 10, k: 11 } };
+const BADGES = {                                          // move-classification badges (t = glyph, c = colour)
+  brilliant: { t: '!!', c: '#1bb8c4', name: 'Brilliant !!' },
+  best:      { t: '\u2605', c: '#5fa83a', name: 'Best Move' },
+  book:      { t: '\uD83D\uDCD6', c: '#9a6b43', name: 'Book' },
+  good:      { t: '\u2022', c: '#7d8da1', name: 'Good' },
+  mistake:   { t: '?', c: '#f08c1a', name: 'Mistake ?' },
+  blunder:   { t: '??', c: '#d8352a', name: 'Blunder ??' }
+};
+const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+const okLabel = k => typeof k === 'string' && has(BADGES, k);
+const num = v => typeof v === 'number' && isFinite(v);
+const strip = s => s.replace(/[+#]/g, '');                // SAN without check / mate marks
+
+/* OPENINGS_DB: built-in lines (6-10 ply from the start position). side = the colour YOU play.
+   category: 'Gambit' | 'Counter-Gambit' | 'Trap' (plus 'Opening' for classical systems; your own lines are 'Custom'). */
+const op = (id, name, category, side, line, description) => ({ id, name, category, side, moves: line.split(' '), description });
+const OPENINGS_DB = [
+  // ---- White gambits ----
+  op('kg', "King's Gambit", 'Gambit', 'w', 'e4 e5 f4 exf4 Nf3 g5 h4 g4 Ne5 Nf6', "Give up the f-pawn to open the f-file and drag Black's e-pawn away. Develop fast and aim at f7: speed beats the pawn."),
+  op('evans', 'Evans Gambit', 'Gambit', 'w', 'e4 e5 Nf3 Nc6 Bc4 Bc5 b4 Bxb4 c3 Ba5', "Offer the b-pawn to win tempi: c3 and d4 roll your centre forward while the bishop eyes f7."),
+  op('danish', 'Danish Gambit', 'Gambit', 'w', 'e4 e5 d4 exd4 c3 dxc3 Bc4 cxb2 Bxb2 d5', "Two pawns for open lines: both bishops bear down on f7 and g7. Develop everything and attack before Black untangles."),
+  op('vienna', 'Vienna Gambit', 'Gambit', 'w', 'e4 e5 Nc3 Nf6 f4 d5 fxe5 Nxe4 Nf3 Be7', "Strike with f4 against the centre, then fxe5 and Nf3 for a quick kingside initiative. Keep every piece active."),
+  op('morra', 'Smith-Morra Gambit', 'Gambit', 'w', 'e4 c5 d4 cxd4 c3 dxc3 Nxc3 Nc6 Nf3 d6', "Trade a pawn for development against the Sicilian: pieces swing out, rooks go to c1 and d1, and the open c-file does the rest."),
+  op('qg', "Queen's Gambit", 'Gambit', 'w', 'd4 d5 c4 e6 Nc3 Nf6 Bg5 Be7 e3 O-O', "Challenge Black's centre with c4. If Black takes you regain it; if not, build pressure with Nc3, Bg5 and e3."),
+  op('halloween', 'Halloween Gambit', 'Gambit', 'w', 'e4 e5 Nf3 Nc6 Nc3 Nf6 Nxe5 Nxe5 d4 Ng6', "Sacrifice a knight for the centre: d4 and e5 gain tempi against Black's knights. Wild and fast, so keep your king safe."),
+  // ---- Black counter-gambits and traps ----
+  op('albin', 'Albin Counter-Gambit', 'Counter-Gambit', 'b', 'd4 d5 c4 e5 dxe5 d4 Nf3 Nc6 g3 Be6', "Sacrifice a pawn for a cramping d4 wedge. Nc6, Be6 and ...Qd7 keep White's pieces tied up."),
+  op('englund', 'Englund Gambit', 'Counter-Gambit', 'b', 'd4 e5 dxe5 Nc6 Nf3 Qe7 Bf4 Qb4+ Bd2 Qxb2', "Blitz bait: ...Qe7 and ...Qb4+ hit b2. You win a pawn against careless play, but against accurate play you are simply a pawn down."),
+  op('stafford', 'Stafford Gambit', 'Counter-Gambit', 'b', 'e4 e5 Nf3 Nf6 Nxe5 Nc6 Nxc6 dxc6 d3 Bc5', "Gambit a pawn for fast development: ...Bc5 plus ...Ng4 or ...h5 set quick tricks on f2 and the h-file."),
+  op('budapest', 'Budapest Gambit', 'Counter-Gambit', 'b', 'd4 Nf6 c4 e5 dxe5 Ng4 Bf4 Nc6 Nf3 Bb4+', "Hit e5 with ...Ng4 and ...Bb4+; you regain the pawn quickly and your pieces get active."),
+  op('latvian', 'Latvian Gambit', 'Counter-Gambit', 'b', 'e4 e5 Nf3 f5 Nxe5 Qf6 d4 d6 Nc4 fxe4', "A wild counter-gambit: ...f5 against 2.Nf3, then ...Qf6 hits e5 and f2. Play fast and open the f-file."),
+  op('rousseau', 'Rousseau Gambit', 'Counter-Gambit', 'b', 'e4 e5 Nf3 Nc6 Bc4 f5 d3 fxe4 dxe4 Nf6', "Counter the Italian with ...f5. After the exchange, develop with ...Nf6 and use the open f-file."),
+  op('scholar', "Scholar's Mate Defense", 'Trap', 'b', 'e4 e5 Bc4 Nc6 Qh5 g6 Qf3 Nf6 Qb3 Qe7', "Beat the Qh5/Bc4 attack: ...g6 hits the queen (never ...Nf6?? Qxf7#). Then develop calmly and take over."),
+  // ---- classical systems ----
+  op('italian', 'Italian Game (Giuoco Piano)', 'Opening', 'w', 'e4 e5 Nf3 Nc6 Bc4 Bc5 c3 Nf6 d3 d6', "Classical development aiming at f7, then c3 and d3 for a slow, safe build-up."),
+  op('london', 'London System', 'Opening', 'w', 'd4 d5 Nf3 Nf6 Bf4 e6 e3 c5 c3 Nc6', "A solid set-up that works against almost anything: bishop out before e3, then Nbd2 and Bd3."),
+  op('sicilian', 'Sicilian Defense', 'Opening', 'b', 'e4 c5 Nf3 d6 d4 cxd4 Nxd4 Nf6 Nc3 a6', "Najdorf set-up: unbalanced and sharp. ...a6 prepares ...e5 or ...b5 with counterplay."),
+  op('caro', 'Caro-Kann Defense', 'Opening', 'b', 'e4 c6 d4 d5 Nc3 dxe4 Nxe4 Bf5 Ng3 Bg6', "Rock-solid structure: get the light-squared bishop out before ...e6."),
+  op('kid', "King's Indian Defense", 'Opening', 'b', 'd4 Nf6 c4 g6 Nc3 Bg7 e4 d6 Nf3 O-O', "Hypermodern: let White build a big centre, then strike with ...e5 or ...c5.")
+];
+const ALL = '__all';                                       // dropdown value for "Practice All Openings"
+let customOps = [];                                        // your saved openings (localStorage), same shape as OPENINGS_DB entries
+const allOpenings = () => OPENINGS_DB.concat(customOps);
+const findOpening = id => allOpenings().find(o => o.id === id) || null;
+
+// Validates a SAN sequence with a temporary Chess instance. Returns { moves } (normalised SAN) or { err }.
+function parseMoves(text) {
+  const toks = String(text).replace(/\d+\.+/g, ' ').split(/\s+/).filter(Boolean);   // "1.e4 e5" and "e4 e5" both work
+  if (toks.length < 2) return { err: 'Enter at least two moves in SAN, e.g. e4 e5 Nf3 Nc6.' };
+  if (toks.length > 20) return { err: 'Keep it to 20 ply (10 moves each) or fewer.' };
+  const g = new Chess(), out = [];
+  for (let i = 0; i < toks.length; i++) {
+    const m = g.move(toks[i]);
+    if (!m) return { err: `Illegal or unclear move "${toks[i]}" at ply ${i + 1}.` };
+    out.push(m.san);
+  }
+  return { moves: out };
+}
+try {                                                      // load custom openings (re-validated: storage may have been edited)
+  const a = JSON.parse(localStorage.getItem(CUSTOM_KEY));
+  if (Array.isArray(a)) a.slice(0, MAX_CUSTOM).forEach(o => {
+    if (!o || typeof o.name !== 'string' || !/^c\d+$/.test(o.id) || !['w', 'b'].includes(o.side) || !Array.isArray(o.moves)) return;
+    const p = parseMoves(o.moves.join(' '));
+    if (p.moves) customOps.push({ id: o.id, name: o.name.slice(0, 40), category: 'Custom', side: o.side, moves: p.moves, description: String(o.description || '').slice(0, 160), custom: true });
+  });
+} catch (e) {}
+
+// Endgame drills: you are White and must reach the goal before your clock runs out.
+const DRILLS = {
+  kr: { name: 'King + Rook vs King', fen: '4k3/8/8/8/8/8/8/R3K3 w - - 0 1', time: 45000, goal: 'mate', note: 'Cut the king off with the rook, bring your king over, mate on the edge.' },
+  kq: { name: 'King + Queen vs King', fen: '4k3/8/8/8/8/8/8/3QK3 w - - 0 1', time: 30000, goal: 'mate', note: 'Box the king in with the queen, but avoid stalemate.' },
+  kp: { name: 'King + Pawn promotion', fen: '4k3/8/3K4/4P3/8/8/8/8 w - - 0 1', time: 45000, goal: 'promote', note: 'Your king leads the pawn: promote it before time is up.' }
+};
+// Opening book used for the "Book" badge (every opening in OPENINGS_DB and your custom ones is added at lookup time).
+const BOOK = [
+  'e4 e5 Nf3 Nc6 Bb5 a6 Ba4 Nf6 O-O Be7 Re1 b5 Bb3 d6', 'e4 e5 Nf3 Nc6 Bc4 Nf6 Ng5 d5 exd5 Na5',
+  'e4 e5 Nf3 Nc6 d4 exd4 Nxd4 Nf6 Nxc6 bxc6 e5 Qe7', 'e4 e5 Nf3 Nf6 Nxe5 d6 Nf3 Nxe4 d4 d5',
+  'e4 e5 f4 exf4 Nf3 g5', 'e4 e5 Nc3 Nf6 f4 d5', 'e4 c5 Nf3 Nc6 d4 cxd4 Nxd4 g6 Nc3 Bg7',
+  'e4 c5 Nf3 e6 d4 cxd4 Nxd4 Nc6 Nc3 Qc7', 'e4 c5 c3 Nf6 e5 Nd5 d4 cxd4 Nf3 Nc6',
+  'e4 e6 d4 d5 Nc3 Nf6 Bg5 Be7 e5 Nfd7', 'e4 e6 d4 d5 e5 c5 c3 Nc6 Nf3 Qb6',
+  'e4 c6 d4 d5 e5 Bf5 Nf3 e6 Be2 c5', 'e4 d5 exd5 Qxd5 Nc3 Qa5 d4 c6', 'e4 d6 d4 Nf6 Nc3 g6 f4 Bg7 Nf3 O-O',
+  'd4 d5 c4 e6 Nc3 Nf6 Bg5 Be7 e3 O-O Nf3 Nbd7', 'd4 d5 c4 c6 Nf3 Nf6 Nc3 dxc4 a4 Bf5',
+  'd4 d5 c4 dxc4 Nf3 Nf6 e3 e6 Bxc4 c5', 'd4 Nf6 c4 g6 Nc3 Bg7 e4 d6 Nf3 O-O Be2 e5',
+  'd4 Nf6 c4 e6 Nc3 Bb4 e3 O-O Bd3 d5 Nf3 c5', 'd4 Nf6 c4 e6 Nf3 b6 g3 Bb7 Bg2 Be7 O-O O-O',
+  'd4 Nf6 c4 g6 Nc3 d5 cxd5 Nxd5 e4 Nxc3 bxc3 Bg7', 'd4 Nf6 Nf3 e6 Bf4 d5 e3 c5 c3 Nc6',
+  'c4 e5 Nc3 Nf6 Nf3 Nc6 g3 d5 cxd5 Nxd5', 'Nf3 d5 g3 Nf6 Bg2 e6 O-O Be7 d3 O-O'
+];
+
+let G = null;                                             // chess.js game (rules engine), created in newGame()
+let model = null, W = null;                               // tf model + plain-array copy of its weights (fast search)
+let history = [], sans = [], labels = [], evals = [], tos = [];   // live game: training records / SAN / badge keys / evals (pawns, White's view) / destination squares
+let replayBuffer = null;
+let startFen = '';                                        // '' = normal start position, otherwise the drill FEN
+let sel = null, legal = [], lastMove = null;              // UI selection state
+let pre = null;                                           // queued premove {from,to,promotion} (single slot)
+let warn = null, warnTimer = 0;                           // off-book highlight {from,to} (Opening Trainer), auto-clears
+let human = 'w', bot = 'b';                               // colours of the current game; the board is flipped when human === 'b'
+let cfg = { mode: 'standard', opening: 'italian', drill: 'kr', gauntlet: false };   // setup that was ACTIVE when the current game started
+let ui = { mode: 'standard', pref: 'w', opening: 'italian', drill: 'kr', radar: false, handicap: false, autoNext: true, pressure: false, aggr: 50, nodes: 700, lr: 10 };   // controls (persisted)
+let over = false, thinking = false, started = false, busy = false, gid = 0, MAT_ONLY = false;
+// gid  : game token. Every async continuation checks it, so a reset can never be corrupted by stale callbacks.
+// busy : true between a move being played and its post-processing finishing (blocks clicks for a few ms).
+let training = false;                                     // true while trainOnOpponentMoves() runs (blocks reset / import / export)
+let RV = null;                                            // review state while a saved game is being replayed (null = live mode)
+let hist = [];                                            // saved match history (max 10), newest first
+let clocks = { w: BLITZ_MS, b: BLITZ_MS }, lastTick = performance.now();
+let curEval = 0, curNN = 0;                               // last settled evaluation (pawns, White's view) / raw NN output
+let soundOn = true, ac = null, lastSec = -1;
+let meta = { games: 0 };
+let tele = null;                                          // telemetry {elo, d (last Elo change), shift (%), losses[<=10], streak}
+let gauntlet = null, quiet = false, gTimer = 0, toastTimer = 0;   // Practice All Openings state / quiet freeze (no analysis reveal) / timers
+let gym = null, gymList = [], gymTimer = 0, gymFlash = null, gymFlashTimer = 0;   // Personal Blunder Gym state
+let recd = null, pKey = '', pStart = 0, slowTimer = 0;   // board recorder sandbox / move-pressure timer
+let hang = new Set();                                     // squares flagged by the Hanging Piece Radar
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => '&#' + c.charCodeAt(0) + ';');   // data from localStorage is never trusted
+const store = (k, v) => { try { localStorage.setItem(k, typeof v === 'string' ? v : JSON.stringify(v)); } catch (e) {} };
+const grid = $('grid');
+window.addEventListener('error', e => { try { log('Error: ' + e.message); } catch (_) {} });
+
+function cleanTele(t) {                                   // validate telemetry from localStorage / imported model files
+  const o = { elo: BASE_ELO, d: 0, shift: null, losses: [], streak: 0 };
+  if (t && typeof t === 'object') {
+    if (num(t.elo)) o.elo = Math.min(3000, Math.max(100, t.elo));
+    if (num(t.d)) o.d = t.d;
+    if (num(t.shift)) o.shift = t.shift;
+    if (Array.isArray(t.losses)) o.losses = t.losses.filter(num).slice(-10);
+    if (num(t.streak)) o.streak = Math.max(0, Math.floor(t.streak));
+  }
+  return o;
+}
+try { const m = JSON.parse(localStorage.getItem(META_KEY)); if (m && num(m.games)) meta = { games: Math.max(0, Math.floor(m.games)) }; } catch (e) {}
+try { tele = cleanTele(JSON.parse(localStorage.getItem(TELE_KEY))); } catch (e) { tele = cleanTele(null); }
+try { soundOn = localStorage.getItem(SOUND_KEY) !== '0'; } catch (e) {}
+try {                                                      // restore (and validate) the last setup
+  const s = JSON.parse(localStorage.getItem(SETUP_KEY)) || {}, rng = (v, lo, hi, d) => num(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : d;
+  if (s.mode === 'trainer' || s.mode === 'drill') ui.mode = s.mode;
+  if (['w', 'b', 'r'].includes(s.pref)) ui.pref = s.pref;
+  if (s.opening === ALL || findOpening(s.opening)) ui.opening = s.opening;
+  if (has(DRILLS, s.drill)) ui.drill = s.drill;
+  ui.radar = s.radar === true; ui.handicap = s.handicap === true; ui.autoNext = s.autoNext !== false; ui.pressure = s.pressure === true;
+  ui.aggr = rng(s.aggr, 0, 100, 50); ui.nodes = rng(s.nodes, 100, 6000, 700); ui.lr = rng(s.lr, 1, 100, 10);
+} catch (e) {}
+P.aggr = ui.aggr; P.nodes = ui.nodes; P.lr = ui.lr / 2000;
+
+/* =========================================================
+   2. CHESS.JS COMPATIBILITY LAYER (v0.10.x: game.board() when present, otherwise rebuilt from get())
+   ========================================================= */
+function boardOf(g) {                                      // 8x8 array, rank 8 first, cells {type,color} or null
+  if (typeof g.board === 'function') return g.board();
+  const b = [];
+  for (let r = 0; r < 8; r++) {
+    const row = [];
+    for (let f = 0; f < 8; f++) row.push(g.get(FILES[f] + (8 - r)) || null);
+    b.push(row);
+  }
+  return b;
+}
+const call = (g, oldName, newName) => (typeof g[oldName] === 'function' ? g[oldName]() : g[newName]());
+const inCheck = g => call(g, 'in_check', 'isCheck');
+const inMate = g => call(g, 'in_checkmate', 'isCheckmate');
+const inStalemate = g => call(g, 'in_stalemate', 'isStalemate');
+const noMaterial = g => call(g, 'insufficient_material', 'isInsufficientMaterial');
+const threefold = g => call(g, 'in_threefold_repetition', 'isThreefoldRepetition');
+const gameOver = g => call(g, 'game_over', 'isGameOver');
+const newChess = fen => (fen ? new Chess(fen) : new Chess());
+
+/* =========================================================
+   3. INLINE SVG STAUNTON-STYLE PIECES (45x45 grid, one silhouette per type, coloured per side)
+   ========================================================= */
+const BASE = '<path d="M10 40.5h25v-4H10z"/>';
+const COLLAR = '<path d="M13 33.5h19v3H13z"/>';
+const ART = {                                              // [filled + outlined shapes, detail strokes]
+  p: ['<circle cx="22.5" cy="12.5" r="5"/><path d="M17 19.5h11v2.5H17z"/><path d="M18.5 22h8c0 4 3 8 4.5 14.5H14c1.5-6.5 4.5-10.5 4.5-14.5z"/>' + BASE, ''],
+  r: ['<path d="M12.5 9.5h4.5v3h3v-3h5v3h3v-3h4.5v8h-20z"/><path d="M14.5 17.5h16l-1.5 16H16z"/>' + COLLAR + BASE, ''],
+  b: ['<circle cx="22.5" cy="7" r="2.6"/><path d="M22.5 9.5c-4.5 3.5-7 7-7 11 0 3 1.5 5 3.5 6h7c2-1 3.5-3 3.5-6 0-4-2.5-7.5-7-11z"/><path d="M17 26.5h11v3H17z"/><path d="M18.5 29.5h8c0 3 2.5 4 3.5 7H15c1-3 3.5-4 3.5-7z"/>' + BASE,
+      '<path d="M22.5 13v6M19.5 16h6" fill="none"/>'],
+  n: ['<path d="M13 36.5C13 30 15.5 27 19 23.5 16.5 23.5 14 25 11.5 27L9 24.5C8.5 22 10 19.5 13 17L16 13 16.5 7.5 20.5 10.5 23.5 7C31 10 35 20 33 36.5z"/>' + BASE,
+      '<circle cx="17.5" cy="16.5" r="1.2"/><circle cx="10.8" cy="22.3" r=".9"/><path d="M23.5 9.5c4 2 7 7 7 14" fill="none"/>'],
+  q: ['<path d="M10.5 14L14.5 27 16.5 12 19.5 26 22.5 9 25.5 26 28.5 12 30.5 27 34.5 14 32 33.5H13z"/><circle cx="10.5" cy="13" r="2"/><circle cx="16.5" cy="10.5" r="2"/><circle cx="22.5" cy="8" r="2"/><circle cx="28.5" cy="10.5" r="2"/><circle cx="34.5" cy="13" r="2"/>' + COLLAR + BASE, ''],
+  k: ['<path d="M21 3h3v3h3v3h-3v3h-3V9h-3V6h3z"/><path d="M22.5 12c-4 0-8 2-10 6-2.5 5 0 10.5 3 13.5l-1 2h16l-1-2c3-3 5.500-8.500 3-13.500-2-4-6-6-10-6z"/>' + COLLAR + BASE,
+      '<path d="M16 25h13" fill="none"/>']
+};
+const PIECES = {};                                         // 'wk', 'bp', ... -> SVG markup
+for (const c of ['w', 'b']) for (const t of 'pnbrqk') {
+  const f = c === 'w' ? '#f7f4ec' : '#2c323c', s = c === 'w' ? '#1b2531' : '#0c1116', d = c === 'w' ? '#1b2531' : '#cdd6e2';
+  PIECES[c + t] = `<svg class="pc" viewBox="0 0 45 45"><g fill="${f}" stroke="${s}" stroke-width="1.5" stroke-linejoin="round">${ART[t][0]}</g>` +
+                  `<g fill="${d}" stroke="${d}" stroke-width="1.2" stroke-linecap="round">${ART[t][1]}</g></svg>`;
+}
+for (let i = 0; i < 64; i++) grid.appendChild(document.createElement('div'));   // 64 cells, repainted by paint()
+
+/* =========================================================
+   4. THE ADAPTIVE BRAIN (TensorFlow.js)
+   768 one-hot inputs (64 squares x 12 piece types) -> Dense(64,ReLU) -> Dense(32,ReLU) -> Dense(1,tanh)
+   Output: evaluation (-1..1, + favours White) of the position reached after a move.
+   ========================================================= */
+function buildModel() {
+  const m = tf.sequential();
+  m.add(tf.layers.dense({ inputShape: [768], units: 64, activation: 'relu', kernelInitializer: 'heNormal' }));
+  m.add(tf.layers.dense({ units: 32, activation: 'relu', kernelInitializer: 'heNormal' }));
+  m.add(tf.layers.dense({ units: 1, activation: 'tanh', kernelInitializer: tf.initializers.randomNormal({ stddev: 0.01 }) }));
+  return m;
+}
+const compatible = m => {                                 // only brains with this exact shape can be loaded / imported
+  try { return m.inputs[0].shape[1] === 768 && m.outputs[0].shape[1] === 1 && m.getWeights().length === 6; } catch (e) { return false; }
+};
+
+// ONE-HOT ENCODING (boardToOneHot): 8x8 board -> Float32Array(768). Square s (a8 = 0 ... h1 = 63) owns slots s*12 .. s*12+11.
+// P N B R Q K = channels 0-5 (White), p n b r q k = channels 6-11 (Black). An empty square stays 12 zeros.
+function boardToOneHot(b) {
+  const x = new Float32Array(768);
+  for (let r = 0; r < 8; r++) for (let f = 0; f < 8; f++) {
+    const p = b[r][f];
+    if (p) x[(r * 8 + f) * 12 + CHANNEL[p.color][p.type]] = 1;
+  }
+  return x;
+}
+
+function refreshWeights() {                                // plain-array copy (always NEW arrays): the search avoids tf.predict() per node
+  const w = model.getWeights().map(t => new Float32Array(t.dataSync()));
+  W = { w1: w[0], b1: w[1], w2: w[2], b2: w[3], w3: w[4], b3: w[5] };
+}
+
+function weightShift(a, b) {                               // mean absolute weight change as a percentage of the original mean magnitude
+  if (!a || !b) return 0;
+  let change = 0, magnitude = 0, n = 0;
+  for (const k in a) {
+    const x = a[k], y = b[k];
+    for (let i = 0; i < x.length; i++) { change += Math.abs(y[i] - x[i]); magnitude += Math.abs(x[i]); n++; }
+  }
+  return magnitude ? 100 * change / magnitude : n ? 100 * change / n : 0;
+}
+
+const h1 = new Float32Array(64), h2 = new Float32Array(32);
+function nnEval(b) {                                       // same maths as the tf model; sparse first layer
+  if (!W) return 0;
+  h1.set(W.b1);
+  for (let r = 0; r < 8; r++) for (let f = 0; f < 8; f++) {
+    const p = b[r][f]; if (!p) continue;
+    const o = ((r * 8 + f) * 12 + CHANNEL[p.color][p.type]) * 64;
+    for (let j = 0; j < 64; j++) h1[j] += W.w1[o + j];
+  }
+  let out = W.b3[0];
+  for (let k = 0; k < 32; k++) {
+    let s = W.b2[k];
+    for (let j = 0; j < 64; j++) if (h1[j] > 0) s += h1[j] * W.w2[j * 32 + k];
+    h2[k] = s > 0 ? s : 0;
+    out += h2[k] * W.w3[k];
+  }
+  return Math.tanh(out);
+}
+
+function verifyForward() {                                 // sanity check: the fast evaluator must equal model.predict()
+  try {
+    const b = boardOf(new Chess());
+    const ref = tf.tidy(() => model.predict(tf.tensor2d([Array.from(boardToOneHot(b))], [1, 768])).dataSync()[0]);
+    if (Math.abs(ref - nnEval(b)) > 1e-3) log('Warning: the fast evaluator differs from the TF model.');
+  } catch (e) { log('Self-check skipped: ' + e.message); }
+}
+
+/* Online TD learning with a bounded experience replay buffer.
+   Targets blend each position's settled evaluation with the discounted final result in White's perspective. */
+function loadReplayBuffer() {
+  if (replayBuffer !== null) return replayBuffer;
+  replayBuffer = [];
+  try {
+    const saved = JSON.parse(localStorage.getItem(REPLAY_KEY) || '[]');
+    if (Array.isArray(saved)) replayBuffer = saved.filter(s =>
+      s && Array.isArray(s.x) && s.x.length === 768 && s.x.every(v => v === 0 || v === 1) &&
+      num(s.y) && s.y >= -1 && s.y <= 1
+    ).slice(-REPLAY_LIMIT);
+  } catch (e) { log('Replay buffer load error: ' + e.message); }
+  return replayBuffer;
+}
+
+function saveReplayBuffer() {
+  try { localStorage.setItem(REPLAY_KEY, JSON.stringify(replayBuffer)); }
+  catch (e) { log('Replay buffer kept in memory: ' + e.message); }
+}
+
+async function trainOnOpponentMoves(gameHistory) {
+  const H = gameHistory.positions, result = gameHistory.result, n = H.length, hs = gameHistory.human === 'b' ? -1 : 1;
+  if (!model) return null;
+  const buffer = loadReplayBuffer();
+  let tactics = 0;
+  for (let i = 0; i < n; i++) {
+    const h = H[i];
+    if (!h || !h.x || h.x.length !== 768) continue;
+    const boardEval = num(h.eval) ? h.eval : num(h.mat) ? h.mat / 100 : 0;
+    const positionTarget = Math.tanh(boardEval / 3);
+    const outcomeTarget = hs * result * Math.pow(0.95, n - 1 - i);
+    const y = 0.5 * positionTarget + 0.5 * outcomeTarget;
+    buffer.push({ x: Array.from(h.x), y });
+    if (i > 0 && h.me && !H[i - 1].me && hs * (h.mat - H[i - 1].mat) >= 200) tactics++;
+  }
+  if (buffer.length > REPLAY_LIMIT) buffer.splice(0, buffer.length - REPLAY_LIMIT);
+  saveReplayBuffer();
+  if (!buffer.length) return null;
+
+  const shuffled = buffer.slice();
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  const batch = shuffled.slice(0, REPLAY_BATCH);
+  while (batch.length < REPLAY_BATCH) batch.push(buffer[Math.floor(Math.random() * buffer.length)]);
+  const X = new Float32Array(REPLAY_BATCH * 768), T = new Float32Array(REPLAY_BATCH);
+  batch.forEach((sample, i) => { X.set(sample.x, i * 768); T[i] = sample.y; });
+  const before = W, oldOpt = model.optimizer;
+  const xs = tf.tensor2d(X, [REPLAY_BATCH, 768]), ys = tf.tensor2d(T, [REPLAY_BATCH, 1]);
+  let losses = [];
+  try {
+    model.compile({ optimizer: tf.train.adam(P.lr), loss: 'meanSquaredError' });
+    const fit = await model.fit(xs, ys, { epochs: 8, batchSize: 16, shuffle: true, verbose: 0 });
+    losses = fit.history.loss;
+    try { await model.save(MODEL_KEY); } catch (e) { log('Brain save error: ' + e.message); }
+  } finally {
+    xs.dispose(); ys.dispose();                            // tensors are always released
+    try { if (oldOpt && oldOpt !== model.optimizer && oldOpt.dispose) oldOpt.dispose(); } catch (e) {}
+  }
+  refreshWeights();                                        // the search now uses the updated brain
+  return { n, tactics, first: Number(losses[0]), last: Number(losses[losses.length - 1]), shift: weightShift(before, W) };
+}
+
+/* =========================================================
+   5. BRAIN TELEMETRY (Elo, win streak, loss trend, weight shift) + BRAIN PERSISTENCE
+   ========================================================= */
+// Standard Elo: expected = 1 / (1 + 10^((opponent - bot) / 400)); new = old + K * (score - expected).
+function updateTelemetry(result, r) {
+  const score = result < 0 ? 1 : result > 0 ? 0 : 0.5;     // the bot's score (human win = 0)
+  const expected = 1 / (1 + Math.pow(10, (HUMAN_ELO - tele.elo) / 400));
+  tele.d = ELO_K * (score - expected);
+  tele.elo = Math.min(3000, Math.max(100, tele.elo + tele.d));
+  tele.streak = result > 0 ? tele.streak + 1 : 0;
+  if (r && num(r.last)) {
+    tele.losses.push(r.last); if (tele.losses.length > 10) tele.losses.shift();
+    tele.shift = num(r.shift) ? r.shift : tele.shift;
+  }
+  store(TELE_KEY, tele); renderTele();
+}
+
+function renderTele() {
+  $('tElo').textContent = Math.round(tele.elo);
+  const ed = $('tEloD'); ed.textContent = tele.d ? (tele.d > 0 ? '+' : '') + tele.d.toFixed(1) : '';
+  ed.className = tele.d > 0 ? 'up' : tele.d < 0 ? 'dn' : 'flat';
+  $('tStreak').textContent = tele.streak;
+  const L = tele.losses, n = L.length, ld = $('tLossD');
+  $('tLoss').textContent = n ? L[n - 1].toFixed(4) : '--';
+  if (n > 1) { const dl = L[n - 1] - L[n - 2]; ld.textContent = (dl <= 0 ? '\u25BC ' : '\u25B2 ') + Math.abs(dl).toFixed(4); ld.className = dl <= 0 ? 'up' : 'dn'; }
+  else { ld.textContent = ''; ld.className = ''; }
+  $('tShift').textContent = tele.shift === null ? '--' : tele.shift.toFixed(3) + '%';
+  const st = $('tState');
+  if (tele.shift === null) { st.textContent = ''; st.className = ''; }
+  else if (tele.shift >= 0.0005) { st.textContent = 'adapting'; st.className = 'up'; }
+  else { st.textContent = 'frozen'; st.className = 'dn'; }
+  $('spark').title = n ? 'Training loss, last ' + n + ' game(s): ' + L.map(v => v.toFixed(3)).join(', ') : 'The loss trend appears after your first game';
+  drawSpark();
+}
+
+function drawSpark() {                                     // lightweight canvas line chart; lower loss = lower on the chart
+  const c = $('spark'), x = c.getContext('2d'), w = c.width, h = c.height, L = tele.losses;
+  x.clearRect(0, 0, w, h);
+  x.strokeStyle = 'rgba(160,155,147,.3)'; x.lineWidth = 2;
+  x.beginPath(); x.moveTo(0, h - 2); x.lineTo(w, h - 2); x.stroke();
+  if (!L.length) return;
+  const mn = Math.min(...L), span = (Math.max(...L) - mn) || 1, pad = 10;
+  const px = i => L.length === 1 ? w / 2 : pad + i * (w - 2 * pad) / (L.length - 1);
+  const py = v => h - pad - (v - mn) / span * (h - 2 * pad);
+  x.strokeStyle = '#81b64c'; x.lineWidth = 3; x.lineJoin = 'round'; x.beginPath();
+  L.forEach((v, i) => i ? x.lineTo(px(i), py(v)) : x.moveTo(px(i), py(v)));
+  x.stroke();
+  L.forEach((v, i) => {
+    x.beginPath(); x.arc(px(i), py(v), i === L.length - 1 ? 6 : 3.5, 0, 7);
+    x.fillStyle = i === L.length - 1 ? '#fff' : '#81b64c'; x.fill();
+  });
+}
+
+// Telemetry is embedded in the saved model (userDefinedMetadata) so Export/Import carries Elo, streak and loss history.
+function stampBrain() {
+  try { if (model.setUserDefinedMetadata) model.setUserDefinedMetadata({ kind: BRAIN_KIND, tele, games: meta.games }); } catch (e) {}
+}
+async function persistBrain() {                            // keeps the browser copy of the brain up to date
+  try { stampBrain(); await model.save(MODEL_KEY); } catch (e) {}
+}
+function adoptMeta(m) {                                    // read telemetry back from an imported model
+  try {
+    const md = m.getUserDefinedMetadata && m.getUserDefinedMetadata();
+    if (md && md.kind === BRAIN_KIND) {
+      tele = cleanTele(md.tele);
+      if (num(md.games)) meta.games = Math.max(0, Math.floor(md.games));
+      store(TELE_KEY, tele); store(META_KEY, meta);
+    }
+  } catch (e) {}
+}
+
+async function exportBrain() {                             // downloads adaptive-chess-brain.json + adaptive-chess-brain.weights.bin
+  if (!model || training) { log('The brain is training. Try again in a moment.'); return; }
+  try {
+    stampBrain();
+    await model.save('downloads://adaptive-chess-brain');
+    log('Exported adaptive-chess-brain.json and .weights.bin. Keep both files together.');
+  } catch (e) { log('Export failed: ' + e.message); }
+}
+
+async function importBrain(files) {                        // needs the .json and the .bin selected together
+  if (!window.tf || training || (started && !over)) { log('Finish or resign the current game (and wait for training) before importing.'); return; }
+  const json = files.find(f => /\.json$/i.test(f.name)), bins = files.filter(f => /\.bin$/i.test(f.name));
+  if (!json || !bins.length) { log('Import: select the .json and the .bin file together.'); return; }
+  try {
+    const m = await tf.loadLayersModel(tf.io.browserFiles([json, ...bins]));
+    if (!compatible(m)) { m.dispose(); log('Import rejected: not a brain from this app (needs 768 inputs and 1 output).'); return; }
+    const old = model; model = m; refreshWeights(); if (old) old.dispose();
+    adoptMeta(m); renderTele(); await persistBrain();
+    if (G) { curNN = nnEval(boardOf(G)); render(); }
+    log(`Brain imported. Adaptive Elo ${Math.round(tele.elo)}.`);
+  } catch (e) { log('Import failed: ' + e.message + ' (select the .json and .bin from the same export).'); }
+}
+
+/* =========================================================
+   6. EVALUATION = handcrafted term (steered by Aggression) + learned NN term
+   ========================================================= */
+function material(b) {                                     // plain material balance, White's view
+  let s = 0;
+  for (const row of b) for (const p of row) if (p) s += (p.color === 'w' ? 1 : -1) * VAL[p.type];
+  return s;
+}
+
+function evaluate(b) {                                     // centipawns from White's view
+  const a = P.aggr / 100;
+  let wk = [4, 7], bk = [4, 0], npm = 0;
+  for (let r = 0; r < 8; r++) for (let f = 0; f < 8; f++) {
+    const p = b[r][f]; if (!p) continue;
+    if (p.type === 'k') { if (p.color === 'w') wk = [f, r]; else bk = [f, r]; }
+    else if (p.type !== 'p') npm += VAL[p.type];
+  }
+  const endgame = npm < 2600;
+  let s = 0;
+  for (let r = 0; r < 8; r++) for (let f = 0; f < 8; f++) {
+    const p = b[r][f]; if (!p) continue;
+    const w = p.color === 'w', sg = w ? 1 : -1, adv = w ? 7 - r : r;
+    const ctr = 4 - Math.max(Math.abs(f - 3.5), Math.abs(r - 3.5));      // 0.5 (corner) .. 3.5 (centre)
+    const v = VAL[p.type] * ('nbq'.includes(p.type) ? 1 + 0.25 * a : 1);  // aggressive bots overvalue active pieces
+    const pos = p.type === 'p' ? adv * 6 + ctr * 3
+              : p.type === 'k' ? (endgame ? ctr * 10 : (adv === 0 ? 15 : -10 * adv))
+              : ctr * 8;
+    let att = 0;                                                          // pieces close to the enemy king
+    if (p.type !== 'p' && p.type !== 'k') {
+      const ek = w ? bk : wk;
+      att = (7 - Math.max(Math.abs(f - ek[0]), Math.abs(r - ek[1]))) * 5;
+    }
+    s += sg * (v + pos * (1.5 - a) + att * a * 2);                       // aggression trades positional weight for attack weight
+  }
+  return s + NN_SCALE * nnEval(b);
+}
+
+/* =========================================================
+   7. SEARCH (async alpha-beta, so the page stays responsive and premoves can be queued while the bot thinks)
+   ========================================================= */
+let nodes = 0, budget = 0, deadline = 0, hardStop = 0, aborted = false, limited = false, curD = 1;
+const QMAX = 4;                                            // quiescence depth cap (ply)
+
+function stop() {                                          // count a node; abort when the budget or time is gone (only inside findBestMove)
+  nodes++;
+  if (limited && (curD > 1 ? (nodes > budget || ((nodes & 127) === 0 && performance.now() > deadline))
+                           : (nodes > budget * 3 || ((nodes & 63) === 0 && performance.now() > hardStop)))) aborted = true;
+  return aborted;
+}
+function stm(b) {                                          // score for the side to move (MAT_ONLY = material only)
+  const e = MAT_ONLY ? material(b) : evaluate(b);
+  return G.turn() === 'w' ? e : -e;
+}
+function order(ms) {                                       // captures (MVV-LVA), promotions, checks first
+  const sc = m => (m.captured ? 10 * VAL[m.captured] - VAL[m.piece] + 1000 : 0) + (m.promotion ? 800 : 0) + (m.san.indexOf('+') > 0 ? 50 : 0);
+  return ms.sort((a, b) => sc(b) - sc(a));
+}
+// QUIESCENCE SEARCH: at a leaf, keep playing captures until the position is quiet. The stand-pat score (the side to move
+// may decline every capture) is the baseline, recursion is capped at QMAX ply, and every node counts against the same
+// node budget / time cap as the main search. This removes the horizon effect (grabbing a defended pawn on the last ply).
+function quiesce(alpha, beta, qd = QMAX) {
+  if (stop()) return 0;
+  const st = stm(boardOf(G));
+  if (qd === 0 || st >= beta) return st;
+  if (st > alpha) alpha = st;
+  for (const m of order(G.moves({ verbose: true }).filter(m => m.captured))) {
+    G.move(m); const v = -quiesce(-beta, -alpha, qd - 1); G.undo();
+    if (aborted) return 0;
+    if (v >= beta) return v;
+    if (v > alpha) alpha = v;
+  }
+  return alpha;
+}
+function ab(d, alpha, beta, ply) {
+  if (stop()) return 0;
+  const ms = G.moves({ verbose: true });
+  if (!ms.length) return inCheck(G) ? -(MATE - ply) : 0;   // checkmate / stalemate
+  if (d === 0) return quiesce(alpha, beta);                  // leaf: resolve the captures first
+  for (const m of order(ms)) {
+    G.move(m); const v = -ab(d - 1, -beta, -alpha, ply + 1); G.undo();
+    if (aborted) return 0;
+    if (v >= beta) return v;
+    if (v > alpha) alpha = v;
+  }
+  return alpha;
+}
+
+// Iterative deepening limited by the node budget (Depth Limit slider) and a short time cap, so blitz moves stay quick.
+// Yields to the browser every ~25 ms (only between root moves, when G is at the root position). Returns null if the game was reset.
+async function findBestMove(id) {
+  budget = P.nodes; nodes = 0; aborted = false; MAT_ONLY = false; limited = true;
+  const t0 = performance.now(), cap = Math.max(200, Math.min(1500, P.nodes * 0.3));      // about 0.2 s at the default 700 nodes
+  deadline = t0 + Math.min(cap, clocks[bot] / 40 + 60); hardStop = deadline + 120;      // hardStop also bounds the first (depth-1) pass
+  let root = order(G.moves({ verbose: true })), best = root[0], tYield = t0;
+  try {
+    for (curD = 1; curD <= 6; curD++) {
+      let alpha = -Infinity, bm = null;
+      for (const m of root) {
+        if (performance.now() - tYield > 25) {
+          await new Promise(r => setTimeout(r, 0)); tYield = performance.now();
+          if (id !== gid || over) return null;                 // checked BEFORE touching G again
+        }
+        G.move(m);
+        const v = -ab(curD - 1, -Infinity, -alpha, 1) + Math.random() * 4;   // tiny noise = varied play
+        G.undo();
+        if (aborted) break;
+        if (v > alpha) { alpha = v; bm = m; }
+      }
+      if (aborted) { if (curD === 1 && bm) best = bm; break; } // out of budget: keep the last COMPLETE iteration
+      if (!bm) break;
+      best = bm; root = [bm].concat(root.filter(m => m !== bm));
+      if (alpha > MATE - 50) break;                            // forced mate found
+    }
+  } finally { limited = false; curD = 1; }
+  return best;
+}
+
+// Settled evaluation (pawns, White's view, clamped to +/-10): evaluate() after a short capture search. Silent during play.
+function settledEval() {
+  nodes = 0; aborted = false; limited = false; curD = 1; MAT_ONLY = false;
+  const v = quiesce(-Infinity, Infinity, QMAX);
+  return Math.max(-10, Math.min(10, (G.turn() === 'w' ? v : -v) / 100));
+}
+
+/* ---- Move classification (computed silently during play, revealed when the game ends) ----
+   Compares the played move with the best move in the position BEFORE it (1 ply + quiescence).
+   Mistake: lost 1.00-1.99 pawns. Blunder: lost >= 2.00. Best: within 0.05. Brilliant: near-best AND a real sacrifice. */
+const isBook = list => {
+  const k = list.map(strip).join(' ');
+  return BOOK.concat(allOpenings().map(o => o.moves.map(strip).join(' '))).some(l => l === k || l.startsWith(k + ' '));
+};
+
+function analyzeMove(fen, mv) {
+  const real = G; G = new Chess(fen);                      // analyse the position before the move on a scratch board
+  try {
+    nodes = 0; aborted = false; limited = false; curD = 1; MAT_ONLY = false;
+    const side = fen.split(' ')[1] === 'w' ? 1 : -1;
+    const root = order(G.moves({ verbose: true }));
+    let alpha = -Infinity, bm = null;
+    for (const m of root) { G.move(m); const v = -quiesce(-Infinity, -alpha, 3); G.undo(); if (v > alpha) { alpha = v; bm = m; } }
+    const pm = root.find(m => m.from === mv.from && m.to === mv.to && m.promotion === mv.promotion);
+    let played = alpha, sac = 0;
+    if (pm) {
+      G.move(pm);
+      if (pm !== bm) played = -quiesce(-Infinity, Infinity, 3);                 // exact value (the loop above gave only a bound)
+      const staticMat = side * material(boardOf(G));
+      MAT_ONLY = true; const settledMat = -quiesce(-Infinity, Infinity, 6); MAT_ONLY = false;
+      sac = staticMat - settledMat;                                        // material the mover loses in the capture line
+      G.undo();
+    }
+    return { best: alpha, played, sac };
+  } finally { MAT_ONLY = false; G = real; }
+}
+
+function classify(mover, fen, mv) {                        // called with G already in the post-move position
+  if (!startFen && isBook(sans)) return 'book';
+  if (mover === bot || inMate(G)) return 'best';           // the bot plays its own search-best move
+  const a = analyzeMove(fen, mv), drop = a.best - a.played;
+  if (drop >= 200) return 'blunder';
+  if (drop >= 100) return 'mistake';
+  if (drop <= 15 && a.sac >= 200 && a.played >= -100) return 'brilliant';
+  return drop <= 5 ? 'best' : 'good';
+}
+
+// Hanging Piece Radar: pieces (either colour) that can be captured and are either undefended or attacked by a cheaper piece.
+function hangingSquares(g) {
+  const out = new Set(), base = g.fen().split(' ');
+  for (const side of ['w', 'b']) {
+    const f = base.slice(); f[1] = side === 'w' ? 'b' : 'w'; f[3] = '-';       // let the OPPONENT of `side` move
+    let h; try { h = new Chess(f.join(' ')); } catch (e) { continue; }
+    for (const m of h.moves({ verbose: true }).filter(m => m.captured && m.captured !== 'k')) {
+      h.move(m);
+      const defended = h.moves({ verbose: true }).some(r => r.to === m.to && r.captured);   // can `side` recapture?
+      h.undo();
+      if (!defended || VAL[m.piece] < VAL[m.captured]) out.add(m.to);
+    }
+  }
+  return out;
+}
+
+/* =========================================================
+   8. OPENING TRAINER + ENDGAME DRILLS
+   While a trainer line lasts, the bot plays ONLY the theoretical reply and your off-book moves are bounced back
+   (orange highlight + expected move + coaching tip) so you can retry at once. When the line ends, the adaptive brain
+   takes over (or, in Practice All Openings, the gauntlet moves on to the next opening).
+   ========================================================= */
+const trainer = () => (cfg.mode === 'trainer' ? findOpening(cfg.opening) : null);   // opening of the ACTIVE game
+const drill = () => (cfg.mode === 'drill' ? DRILLS[cfg.drill] || null : null);
+
+function bookMove() {                                      // the bot's book reply for the current ply, or null when the line is over
+  const T = trainer();
+  if (!T || sans.length >= T.moves.length) return null;
+  const want = strip(T.moves[sans.length]);
+  return G.moves({ verbose: true }).find(m => strip(m.san) === want) || null;
+}
+
+function describeSan(s) {                                  // "Nf3" -> "developing your Knight to f3"
+  s = strip(s);
+  if (s === 'O-O') return 'castling kingside';
+  if (s === 'O-O-O') return 'castling queenside';
+  const names = { N: 'Knight', B: 'Bishop', R: 'Rook', Q: 'Queen', K: 'King' }, to = s.slice(-2), cap = s.includes('x'), pc = names[s[0]];
+  if (!pc) return cap ? `capturing on ${to} with the ${s[0]}-pawn` : `pushing the pawn to ${to}`;
+  if (cap) return `capturing on ${to} with your ${pc}`;
+  return pc === 'Knight' || pc === 'Bishop' ? `developing your ${pc} to ${to}` : `moving your ${pc} to ${to}`;
+}
+
+function offBook(m, T) {                                   // the move is NOT played: highlight it and let the user retry
+  warn = { from: m.from, to: m.to };
+  clearTimeout(warnTimer);
+  warnTimer = setTimeout(() => { warn = null; if (G && !RV) draw(); }, 1800);
+  const exp = T.moves[sans.length];
+  if (cfg.gauntlet && gauntlet) gauntlet.errs++;           // a slip: this opening will not count as mastered
+  say(`Off-book! Expected ${exp}: try ${describeSan(exp)} instead. ${T.description}`);
+  setStatus(`Off-book. Expected ${exp}. Try again.`); sfx('warn'); draw(); renderGauntlet();
+}
+
+/* =========================================================
+   9. GAME FLOW (move -> afterMove -> bot / premove), CLOCKS, TRAINING TRIGGER
+   ========================================================= */
+function clockTick() {                                     // charge elapsed time to the side to move
+  const now = performance.now();
+  if (G && started && !over && !RV) {
+    const t = G.turn();
+    clocks[t] -= now - lastTick;
+    if (clocks[t] <= 0) { clocks[t] = 0; finish(t === human ? -1 : 1, 'Timeout'); }
+  }
+  lastTick = now;
+}
+function lowTimeTick() {                                   // audible tick once per second while YOUR clock runs below 10 s
+  if (!G || !started || over || RV || G.turn() !== human || clocks[human] >= 10000) { lastSec = -1; return; }
+  const s = Math.ceil(clocks[human] / 1000);
+  if (s > 0 && s !== lastSec) { lastSec = s; sfx(s <= 3 ? 'tick2' : 'tick'); }
+}
+setInterval(() => { if (G) { clockTick(); renderClocks(); lowTimeTick(); pressureTick(); } }, 100);
+
+// Plays a move for whoever is to move and records it. Returns false if it was refused (Opening Trainer off-book move).
+// The slow part (analysis, thoughts) runs in afterMove() one tick later, so the move is painted immediately.
+function commit(m, isPre) {
+  clockTick();
+  if (over || busy || RV || gym || recd) return false;
+  const mover = G.turn(), fen = G.fen(), id = gid, T = trainer();
+  if (T && mover === human && sans.length < T.moves.length && strip(m.san) !== strip(T.moves[sans.length])) { offBook(m, T); return false; }
+  const mv = G.move({ from: m.from, to: m.to, promotion: m.promotion || 'q' });   // promotions auto-queen
+  if (!mv) return false;
+  busy = true; warn = null;
+  if (!started) { started = true; lastTick = performance.now(); }
+  lastMove = mv; sel = null; legal = [];
+  const b = boardOf(G), idx = sans.length;
+  history.push({ x: boardToOneHot(b), me: mover === human, mat: material(b), aggressive: !!mv.captured || !!mv.promotion || mv.san.indexOf('+') > 0, label: null });
+  sans.push(mv.san); labels.push(null); evals.push(null); tos.push(mv.to);
+  sfx(mv.captured ? 'capture' : 'move');
+  if (inCheck(G)) sfx('check');                            // warning chime right after the move sound
+  render();
+  setTimeout(() => afterMove(id, idx, mover, fen, mv, !!isPre), 0);
+  return true;
+}
+
+function afterMove(id, idx, mover, fen, mv, isPre) {
+  if (id !== gid) return;                                  // game was reset in the meantime
+  const prevEval = curEval, ended = gameOver(G), hs = human === 'w' ? 1 : -1, T = trainer(), D = drill();
+  let label = 'good', e = prevEval;
+  try {                                                    // analysis must never be able to freeze the game loop
+    label = classify(mover, fen, mv);
+    e = ended ? (inMate(G) ? (mover === 'w' ? 10 : -10) : 0) : settledEval();
+  } catch (err) { log('Analysis skipped: ' + err.message); }
+  labels[idx] = label; history[idx].label = label; history[idx].eval = e;   // stored silently; the UI only shows them after the game
+  evals[idx] = Math.round(e * 100) / 100; curEval = e;
+  const nn = nnEval(boardOf(G)), nnShift = nn - curNN; curNN = nn;     // how much the network's own opinion moved
+  let text = commentOn({ me: mover === human, hs, label, mv, before: prevEval, after: curEval, nnShift, isPre });
+  let completed = false;
+  if (T && idx < T.moves.length) {                         // Opening Trainer feedback replaces the generic comments
+    completed = idx + 1 >= T.moves.length;
+    if (completed && cfg.gauntlet) text = null;            // the gauntlet announces its own result
+    else if (completed) text = `Book complete! That was the ${T.name}. I'm taking over with my adaptive brain now.`;
+    else if (mover === human) text = `On book! Move ${idx + 1} of ${T.moves.length} of the ${T.name}.`;
+  }
+  if (text) say(text);
+  if (completed && cfg.gauntlet) completeOpening(T);       // freezes the board quietly BEFORE the flow below decides who moves next
+  render();
+  lastTick = performance.now();                            // analysis time is not charged to anybody's clock
+  busy = false;
+  let end = null;
+  if (ended) end = inMate(G) ? [mover === human ? 1 : -1, 'Checkmate']
+    : [0, inStalemate(G) ? 'Stalemate' : noMaterial(G) ? 'Insufficient material' : threefold(G) ? 'Repetition' : 'Draw'];
+  else if (D && D.goal === 'promote' && mover === human && mv.promotion) end = [1, 'Promotion'];
+  if (end) finish(end[0], end[1]);
+  else if (over) { /* flagged, resigned or gauntlet opening completed: nothing more to do */ }
+  else if (mover === human) botMove();
+  else { setStatus('Your move'); if (pre) runPremove(id); }   // bot just moved: execute the queued premove right away
+}
+
+function botMove() {
+  const id = gid, book = bookMove();                       // book reply (Opening Trainer) or null -> adaptive brain
+  thinking = true; setStatus(book ? 'Bot plays its book move...' : 'Bot is thinking... (you can premove)');
+  setTimeout(async () => {                                 // let the browser repaint first, then search
+    if (id !== gid || over) return;
+    let m = book;
+    if (m) await new Promise(r => setTimeout(r, 250));     // short pause so the book reply feels natural
+    else m = await findBestMove(id);
+    if (!m || id !== gid || over) return;
+    thinking = false;
+    commit(m, false);
+  }, 30);
+}
+
+function runPremove(id) {                                  // validate and play the queued premove; flush it if illegal
+  if (id !== gid || over || busy || !pre || G.turn() !== human) return;
+  const p = pre; pre = null;
+  const m = G.moves({ verbose: true }).find(x => x.from === p.from && x.to === p.to && (!x.promotion || x.promotion === p.promotion));
+  if (m) { commit(m, true); }
+  else { log('Premove dropped: it is no longer legal.'); setStatus('Your move'); render(); }
+}
+
+function raiseBudget() {                                   // Dynamic Handicap: 3 wins in a row -> deeper bot search
+  const old = P.nodes; P.nodes = Math.min(6000, P.nodes + 400);
+  $('nodes').value = P.nodes; syncSliders();
+  log(`Win streak ${tele.streak}! Dynamic Handicap: bot search budget ${old} to ${P.nodes} nodes.`);
+  say('Three in a row? Fine. I am thinking harder from now on.');
+}
+
+// Game over (checkmate, draw, timeout, resignation, drill goal): save to history, reveal the analysis, then (standard and
+// opening games only) learn from the game, update telemetry (loss, weight shift, Elo, streak) and persist the brain.
+// Practice All Openings games are not saved or trained on: they are short book drills.
+async function finish(result, method) {
+  if (over || RV) return;
+  const id = gid, drillGame = cfg.mode === 'drill', lite = !!cfg.gauntlet;
+  over = true; thinking = false; sel = null; legal = []; pre = null; warn = null; quiet = lite;
+  for (let i = 0; busy && i < 50; i++) await new Promise(r => setTimeout(r, 20));   // let the last move's analysis land first
+  if (id !== gid) return;
+  setStatus((result > 0 ? 'You win' : result < 0 ? 'Bot wins' : 'Draw') + ': ' + method);
+  say(lite ? 'Opening not finished. Press New game to retry it, or Next Opening to move on.'
+    : drillGame ? (result > 0 ? `Drill complete: ${method}. Run it again, faster.` : `Drill failed (${method}). Reset and try again.`)
+    : result > 0 ? 'You got me. Training on the moves that beat me...' : result < 0 ? 'That one is mine. Logging your habits for the rematch.'
+    : 'A draw. Recording every pawn structure for next time.');
+  if (!lite) recordGame(result, method);
+  render();                                                // `over` unlocks the evaluation bar and every badge
+  if (drillGame || lite) { history = []; renderGauntlet(); return; }   // drills / book drills teach the brain nothing and do not move Elo or the streak
+  training = true;
+  let r = null;
+  try { r = await trainOnOpponentMoves({ positions: history, result, human }); }
+  catch (e) { log('Training error: ' + e.message); }
+  finally { training = false; }
+  if (id === gid) history = [];                            // release the per-move training data
+  meta.games++; store(META_KEY, meta);
+  updateTelemetry(result, r);                              // learning is already applied, so this runs even after "New game"
+  if (ui.handicap && result > 0 && tele.streak > 0 && tele.streak % 3 === 0) raiseBudget();
+  await persistBrain();
+  log(r ? `Learned from ${r.n} positions. ${r.tactics} tactic(s) exploited. fit() loss ${r.first.toFixed(3)} to ${r.last.toFixed(3)}. Weights shifted ${r.shift.toFixed(2)}%.`
+        : 'Game too short to learn from.');
+  render();
+}
+
+function newGame() {
+  leaveSpecial(); clearTimeout(gTimer); quiet = false;
+  let opening = ui.opening, isG = false;
+  if (ui.mode === 'trainer' && ui.opening === ALL) {       // Practice All Openings: the current queue entry is the opening
+    isG = true; nextPlayable();                            // (re)builds the queue when needed and skips deleted openings
+    opening = gauntlet.queue[gauntlet.idx];
+  }
+  cfg = { mode: ui.mode, opening, drill: ui.drill, gauntlet: isG };   // freeze the setup for this game
+  const T = trainer(), D = drill();
+  human = D ? 'w' : T ? T.side : ui.pref === 'r' ? (Math.random() < 0.5 ? 'w' : 'b') : ui.pref;   // trainer: the opening decides your colour
+  bot = human === 'w' ? 'b' : 'w';
+  startFen = D ? D.fen : '';
+  gid++; G = newChess(startFen); RV = null; history = []; sans = []; labels = []; evals = []; tos = []; sel = null; legal = []; pre = null;
+  clearTimeout(warnTimer); warn = null;
+  lastMove = null; over = false; thinking = false; started = false; busy = false; lastSec = -1;
+  clocks = D ? { w: D.time, b: D.time } : { w: BLITZ_MS, b: BLITZ_MS }; lastTick = performance.now();
+  curEval = 0; curNN = nnEval(boardOf(G));
+  const white = human === 'w', side = white ? 'White' : 'Black';
+  if (D) {
+    say(`${D.name}: ${D.note}`);
+    setStatus(`Drill: ${D.goal === 'mate' ? 'checkmate' : 'promote the pawn'} in ${D.time / 1000} s. The clock starts with your first move.`);
+  } else if (T) {
+    say(`${T.name}: you play ${side}. ${T.description} Follow the main line and I will answer with theory.`);
+    setStatus(white ? 'You play White. Follow the book line.' : 'You play Black. The bot opens with its book move.');
+  } else if (white) {
+    say("Make your first move. I'm studying how you open.");
+    setStatus('You play White. The clock starts when you move.');
+  } else {
+    say("I'll open the game. Show me how you answer.");
+    setStatus('You play Black. The bot opens; your clock starts after its first move.');
+  }
+  syncSetup(); renderHist(); render();
+  if (!white) botMove();                                   // Black: the bot (White) plays the first move immediately
+}
+
+/* =========================================================
+   10. MATCH HISTORY (rolling 10 games in localStorage), ERROR HEATMAP, REVIEW MODE
+   ========================================================= */
+const fenOk = s => typeof s === 'string' && s.length < 100 && /^[rnbqkpRNBQKP1-8\/]+ [wb] /.test(s);
+function loadHist() {                                      // validates everything: storage may be empty, corrupt or edited
+  try {
+    const a = JSON.parse(localStorage.getItem(HIST_KEY));
+    if (!Array.isArray(a)) return [];
+    return a.filter(h => h && ['Win', 'Loss', 'Draw'].includes(h.result) && Array.isArray(h.pgn) && h.pgn.length < 600 &&
+                         h.pgn.every(s => typeof s === 'string' && s.length < 12))
+      .slice(0, MAX_HIST).map(h => ({
+        id: +h.id || Date.now(), t: +h.t || 0, result: h.result, method: String(h.method || '').slice(0, 30),
+        side: h.side === 'b' ? 'b' : 'w', opening: String(h.opening || '').slice(0, 40), start: fenOk(h.start) ? h.start : '',
+        moves: Math.ceil(h.pgn.length / 2), pgn: h.pgn,
+        tos: Array.isArray(h.tos) && h.tos.length === h.pgn.length && h.tos.every(s => /^[a-h][1-8]$/.test(s)) ? h.tos : null,
+        labels: h.pgn.map((_, i) => okLabel(h.labels && h.labels[i]) ? h.labels[i] : null),
+        evals: h.pgn.map((_, i) => { const v = h.evals && h.evals[i]; return num(v) ? v : 0; })
+      }));
+  } catch (e) { return []; }
+}
+
+function saveHist() {
+  for (;;) {
+    try { localStorage.setItem(HIST_KEY, JSON.stringify(hist)); return; }
+    catch (e) { if (hist.length <= 1) return; hist.pop(); }  // quota exceeded: drop the oldest game and retry
+  }
+}
+
+function recordGame(result, method) {
+  if (!sans.length) return;                                // nothing was played
+  const T = trainer(), D = drill();
+  hist.unshift({
+    id: Date.now(), t: Date.now(), result: result > 0 ? 'Win' : result < 0 ? 'Loss' : 'Draw', method,
+    side: human, opening: T ? T.name : D ? 'Drill: ' + D.name : '', start: startFen,
+    moves: Math.ceil(sans.length / 2), pgn: sans.slice(), tos: tos.slice(), labels: labels.slice(), evals: evals.slice()
+  });
+  if (hist.length > MAX_HIST) hist.length = MAX_HIST;      // rolling window: the oldest game falls off
+  saveHist(); renderHist(); refreshGym();
+}
+
+function renderHist() {
+  const el = $('hist');
+  if (!hist.length) el.innerHTML = '<li class="empty">No games yet. Finish one to review it here.</li>';
+  else el.innerHTML = hist.map(h => {
+    const when = h.t ? new Date(h.t).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+    return `<li class="${RV && RV.rec === h ? 'on' : ''}"><span class="res ${esc(h.result)}">${esc(h.result)}</span>` +
+      `<span class="info">${esc(h.method)}<small>${h.moves} moves \u00b7 ${h.side === 'b' ? 'Black' : 'White'}` +
+      `${h.opening ? ' \u00b7 ' + esc(h.opening) : ''}${when ? ' \u00b7 ' + esc(when) : ''}</small></span>` +
+      `<button class="ghost sm" data-id="${h.id}">Review</button></li>`;
+  }).join('');
+  renderHeat();
+}
+
+function tosOf(h) {                                        // destination square of every ply (older saves are rebuilt by replay, then cached)
+  if (h.tos) return h.tos;
+  const g = newChess(h.start), t = [];
+  for (const s of h.pgn) { const m = g.move(s); if (!m) break; t.push(m.to); }
+  return (h.tos = t);
+}
+
+// Error Heatmap: for the player's own moves rated Mistake (1 point) or Blunder (2 points), count the destination squares.
+function renderHeat() {
+  const c = {};
+  for (const h of hist) {
+    const t = tosOf(h), mine = h.side === 'w' ? 0 : 1;
+    h.pgn.forEach((_, i) => {
+      const k = h.labels[i];
+      if (i % 2 === mine && t[i] && (k === 'mistake' || k === 'blunder')) c[t[i]] = (c[t[i]] || 0) + (k === 'blunder' ? 2 : 1);
+    });
+  }
+  const max = Math.max(1, ...Object.values(c));
+  for (const d of $('heat').children) {
+    const n = c[d.dataset.sq] || 0;
+    d.style.boxShadow = n ? `inset 0 0 0 40px rgba(255,60,60,${(0.25 + 0.7 * n / max).toFixed(2)})` : 'none';
+    d.title = n ? `${d.dataset.sq}: ${n} error point(s)` : d.dataset.sq;
+  }
+}
+(function buildHeat() {                                    // mini 8x8 grid, White at the bottom
+  for (let r = 0; r < 8; r++) for (let f = 0; f < 8; f++) {
+    const d = document.createElement('div'); d.dataset.sq = FILES[f] + (8 - r); d.className = (r + f) % 2 ? 'd' : 'l'; $('heat').appendChild(d);
+  }
+})();
+
+function enterReview(id) {                                 // engine frozen, board replays a saved game (flipped if you played Black)
+  if ((started && !over) || busy) return;                  // never interrupt a live game
+  const rec = hist.find(h => h.id === id); if (!rec) return;
+  leaveSpecial();
+  clearTimeout(gTimer); gid++; sel = null; legal = []; pre = null; thinking = false; warn = null;   // gid++ also cancels a pending first bot move
+  RV = { g: null, last: null, ply: 0, sans: rec.pgn, labels: rec.labels, evals: rec.evals, rec, start: rec.start, flip: rec.side === 'b', human: rec.side };
+  say('Reviewing your game. Step through with < and > and look for the orange and red badges.');
+  gotoPly(0); renderHist();
+}
+
+function gotoPly(p) {                                      // rebuild the position after `p` plies from the saved SAN list
+  if (!RV) return;
+  p = Math.max(0, Math.min(RV.sans.length, p));
+  const g = newChess(RV.start); let last = null, n = 0;
+  for (; n < p; n++) { const m = g.move(RV.sans[n]); if (!m) break; last = m; }   // corrupt data stops the replay safely
+  RV.g = g; RV.last = last; RV.ply = n;
+  setStatus(reviewStatus()); render();
+}
+
+function reviewStatus() {
+  const i = RV.ply - 1, r = RV.rec;
+  if (i < 0) return `Reviewing: ${r.result} by ${r.method}. Use < > or click a move.`;
+  const f = v => (v > 0 ? '+' : '') + (Math.abs(v) < 0.005 ? 0 : v).toFixed(2);
+  return `${Math.floor(i / 2) + 1}${i % 2 ? '...' : '.'} ${RV.sans[i]}   eval ${f(i ? RV.evals[i - 1] : 0)} to ${f(RV.evals[i])}`;
+}
+
+/* =========================================================
+   11. THOUGHT LOG + AUDIO CUES (Web Audio API, all sounds are synthesized, no files)
+   ========================================================= */
+const pick = a => a[Math.floor(Math.random() * a.length)];
+function say(t) {
+  const el = $('thought'); el.textContent = t;
+  el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');      // retrigger the fade-in
+}
+function commentOn(c) {                                    // only the human's moves are commented on; c.hs = +1 (human is White) or -1
+  if (!c.me) return null;
+  const after = c.after * c.hs, before = c.before * c.hs, nn = c.nnShift * c.hs;    // everything from the human's point of view
+  switch (c.label) {
+    case 'blunder': return pick(['Aha! I detected an unprotected piece. Calculating traps...', 'That square just got very interesting. Let me see what I can win.']);
+    case 'brilliant': return pick(['Impressive choice! My winning probability just dropped.', 'A sacrifice with a point. I did not see that coming.']);
+    case 'mistake': return pick(['Hmm, that loosened something. I am circling the weak squares.', 'A small crack in your position. Probing it...']);
+    case 'book': return pick(['Textbook opening. Let us see who remembers more theory.', 'Standard theory. I know this road too.']);
+  }
+  if (c.isPre) return 'A premove! Fast hands. Let us see if it holds up.';
+  if (Math.abs(after) < 0.15) return 'Your structure is rock-solid. Looking for microscopic weaknesses.';
+  if (nn > 0.12) return 'My network just flinched: this pattern looks familiar from your earlier games.';
+  if (after - before >= 0.8) return 'That shifted the balance your way. Reassessing.';
+  if (after >= 1.5) return 'You are pressing hard. I need counterplay, fast.';
+  if (after <= -1.5) return 'I like where this is heading. Converting carefully.';
+  if (c.mv.captured) return 'A trade. Simplifying is a choice. I will make it hard.';
+  return pick(['Quiet and accurate. Recomputing.', 'Noted. Updating my model of how you play.']);
+}
+
+function audio() {                                         // lazily create / resume the AudioContext (needs a user gesture)
+  if (!ac) { const C = window.AudioContext || window.webkitAudioContext; if (!C) return null; ac = new C(); }
+  if (ac.state === 'suspended') ac.resume().catch(() => {});
+  return ac;
+}
+function tone(f, dur, type, vol, delay = 0, slideTo = 0) { // one enveloped oscillator note (nodes are garbage-collected after they stop)
+  const t = ac.currentTime + delay, o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.frequency.setValueAtTime(f, t);
+  if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g); g.connect(ac.destination); o.start(t); o.stop(t + dur + 0.02);
+}
+let noiseBuf = null;
+function click(dur, vol, hp) {                             // short high-passed noise burst = crisp click / impact
+  if (!noiseBuf) {
+    const n = Math.floor(ac.sampleRate * 0.2); noiseBuf = ac.createBuffer(1, n, ac.sampleRate);
+    const d = noiseBuf.getChannelData(0); for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+  }
+  const t = ac.currentTime, s = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
+  s.buffer = noiseBuf; f.type = 'highpass'; f.frequency.value = hp;
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  s.connect(f); f.connect(g); g.connect(ac.destination); s.start(t); s.stop(t + dur);
+}
+function sfx(kind) {
+  if (!soundOn) return;
+  try {
+    if (!audio()) return;
+    switch (kind) {
+      case 'move':    click(0.035, 0.5, 1500); tone(240, 0.07, 'triangle', 0.14, 0, 120); break;           // soft wooden click
+      case 'capture': click(0.08, 0.9, 700); tone(170, 0.14, 'square', 0.1, 0, 60); tone(520, 0.05, 'sawtooth', 0.05); break;   // sharper impact
+      case 'check':   tone(988, 0.16, 'sine', 0.16, 0.07); tone(1319, 0.3, 'sine', 0.16, 0.2); break;    // two-note warning chime
+      case 'premove': tone(620, 0.05, 'sine', 0.06); break;
+      case 'warn':    tone(300, 0.12, 'triangle', 0.14); tone(210, 0.18, 'triangle', 0.14, 0.11); break;   // off-book buzz
+      case 'slow':    tone(160, 0.18, 'sawtooth', 0.07); tone(120, 0.22, 'sawtooth', 0.06, 0.1); break;      // too slow: subtle low buzz
+      case 'tick':    click(0.02, 0.35, 3500); tone(1500, 0.03, 'square', 0.03); break;                    // subtle low-time tick
+      case 'tick2':   click(0.02, 0.5, 3500); tone(2100, 0.04, 'square', 0.05); break;                     // last 3 seconds: higher, louder
+    }
+  } catch (e) {}
+}
+
+/* =========================================================
+   12. BOARD UI (CSS grid + inline SVG, flips when you play Black), EVALUATION BAR, MOVE LIST
+   ========================================================= */
+// What is on screen: the review game while reviewing, otherwise the live game.
+const V = () => gym ? { g: gym.g, last: gym.last, sans: [], labels: [], evals: [], ply: 0, flip: gym.side === 'b', human: gym.side }
+  : recd ? { g: recd.g, last: recd.last, sans: recd.sans, labels: [], evals: [], ply: recd.sans.length, flip: recd.flip, human: 'w' }
+  : RV || { g: G, last: lastMove, sans, labels, evals, ply: sans.length, flip: human === 'b', human };
+const showA = () => !gym && !recd && (!!RV || (over && !quiet));   // analysis (eval bar, badges): review and after a normal game only
+const draw = () => paint(V(), showA());
+
+// Repaints the 64 cells (only cells whose content changed are touched). Screen cell (c, r) maps to board file / row,
+// mirrored on both axes when the board is flipped.
+function paint(v, show) {
+  const g = v.g, fl = !!v.flip, b = boardOf(g), cells = grid.children, last = v.last;
+  const kb = show && last && okLabel(v.labels[v.ply - 1]) ? v.labels[v.ply - 1] : null;
+  const chk = inCheck(g) ? g.turn() : null, hints = new Map();
+  if (!RV) legal.forEach(m => hints.set(m.to, m.captured ? 'cap' : 'hint'));
+  hang = ui.radar ? hangingSquares(g) : new Set();
+  for (let i = 0; i < 64; i++) {
+    const c = i & 7, r = i >> 3, f = fl ? 7 - c : c, rr = fl ? 7 - r : r, sq = FILES[f] + (8 - rr), p = b[rr][f];
+    let t = '';
+    if (gymFlash && (sq === gymFlash.from || sq === gymFlash.to)) t = gymFlash.kind;       // gym: 'ok' (green) / 'bad' (red)
+    else if (!RV && warn && (sq === warn.from || sq === warn.to)) t = 'warn';
+    else if (!RV && pre && (sq === pre.from || sq === pre.to)) t = 'pre';
+    else if (!RV && sel === sq) t = 'sel';
+    else if (p && p.type === 'k' && p.color === chk) t = 'chk';
+    else if (last && (sq === last.from || sq === last.to)) t = 'last';
+    const hint = hints.get(sq) || '', hg = hang.has(sq), bd = kb && sq === last.to ? kb : '';
+    const key = [sq, p ? p.color + p.type : '', t, hint, hg, bd].join('|');
+    const el = cells[i]; if (el._k === key) continue;
+    el._k = key; el.dataset.sq = sq;
+    el.className = 'sq ' + ((f + rr) % 2 ? 'd' : 'l') + (t ? ' t-' + t : '') + (hint ? ' ' + hint : '') + (hg ? ' hang' : '');
+    el.innerHTML = (p ? PIECES[p.color + p.type] : '') + (c === 0 ? `<i class="co r">${8 - rr}</i>` : '') + (r === 7 ? `<i class="co f">${FILES[f]}</i>` : '') +
+      (bd ? `<b class="mb" style="background:${BADGES[bd].c}">${BADGES[bd].t}</b>` : '');
+  }
+}
+
+function premoveTargets(sq) {                              // your moves in the CURRENT position as if it were your turn (scratch copy)
+  const t = G.fen().split(' '); t[1] = human; t[3] = '-';
+  try { return new Chess(t.join(' ')).moves({ square: sq, verbose: true }); } catch (e) { return []; }
+}
+
+grid.addEventListener('click', e => {
+  const el = e.target.closest('.sq');
+  if (!el) return;
+  if (recd) return recClick(el.dataset.sq);                // board recorder: free-move sandbox
+  if (gym) return gymClick(el.dataset.sq);                 // blunder gym: find the better move
+  if (!G || over || busy || RV) return;
+  const sq = el.dataset.sq, premoving = G.turn() !== human;   // opponent to move = bot thinking = premove mode
+  const mv = sel && legal.find(m => m.to === sq && (!m.promotion || m.promotion === 'q'));
+  if (mv) {
+    if (premoving) {
+      pre = { from: mv.from, to: mv.to, promotion: 'q' }; sel = null; legal = []; sfx('premove');
+      setStatus(`Premove queued: ${pre.from}-${pre.to}. Right-click or Esc cancels.`); draw();
+      return;
+    }
+    return commit(mv, false);
+  }
+  const p = G.get(sq);
+  if (p && p.color === human) { sel = sq; legal = premoving ? premoveTargets(sq) : G.moves({ square: sq, verbose: true }); }
+  else { sel = null; legal = []; }
+  draw();
+});
+const clearPremove = () => { if (RV) return; sel = null; legal = []; pre = null; if (G) draw(); };
+grid.addEventListener('contextmenu', e => { e.preventDefault(); clearPremove(); });
+window.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { if (!$('vault').hidden) closeVault(); else clearPremove(); }
+  else if (RV && e.key === 'ArrowLeft') { e.preventDefault(); gotoPly(RV.ply - 1); }
+  else if (RV && e.key === 'ArrowRight') { e.preventDefault(); gotoPly(RV.ply + 1); }
+});
+window.addEventListener('pointerdown', () => { if (soundOn) audio(); }, { passive: true });   // unlock audio on the first gesture
+
+// Evaluation bar. s = null: locked at a neutral 50/50 (live game). Otherwise linear, +/-10.00 pins the bar.
+// flip = board flipped (you play Black): White's area sits on TOP, Black's at the bottom, matching the board.
+function setEvalBar(s, flip) {
+  const bar = $('evalbar'), t = $('evT'), locked = s === null;
+  bar.classList.toggle('locked', locked); bar.classList.toggle('flip', !!flip);
+  if (locked) {
+    $('evB').style.flexBasis = '50%'; t.textContent = '--'; t.className = 'dk bot';
+    bar.title = 'Evaluation unlocks when the game ends'; bar.removeAttribute('aria-valuenow');
+    return;
+  }
+  const v = Math.abs(s) < 0.005 ? 0 : Math.max(-10, Math.min(10, s)), whiteLeads = v >= 0;
+  $('evB').style.flexBasis = (50 - 5 * v) + '%';           // Black's share of the bar
+  t.textContent = (v > 0 ? '+' : '') + v.toFixed(2);
+  t.className = (whiteLeads ? 'dk ' : 'lt ') + (whiteLeads !== !!flip ? 'bot' : 'top');   // label sits inside the leading side
+  bar.title = 'Evaluation'; bar.setAttribute('aria-valuenow', v.toFixed(2));
+}
+
+const badgeHTML = k => okLabel(k) ? `<i class="bd" style="background:${BADGES[k].c}" title="${BADGES[k].name}">${BADGES[k].t}</i>` : '';
+function renderMoves(v, show) {                            // badges only when unlocked; moves are clickable in review
+  let h = '';
+  v.sans.forEach((s, i) => {
+    if (i % 2 === 0) h += `<span class="no">${i / 2 + 1}.</span>`;
+    h += `<span class="mv${RV && i + 1 === RV.ply ? ' cur' : ''}" data-ply="${i + 1}">${esc(s)}${show ? badgeHTML(v.labels[i]) : ''}</span>`;
+  });
+  $('moves').innerHTML = h;
+}
+
+function fmt(ms) { const s = Math.ceil(ms / 1000); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
+function renderClocks() {                                  // top clock = bot, bottom clock = you, whichever colours you play
+  const hh = RV ? RV.human : human;
+  $('cBot').firstElementChild.textContent = `Bot (${hh === 'w' ? 'Black' : 'White'})`;
+  $('cMe').firstElementChild.textContent = `You (${hh === 'w' ? 'White' : 'Black'})`;
+  $('cBot').lastElementChild.textContent = fmt(clocks[bot]);
+  $('cMe').lastElementChild.textContent = fmt(clocks[human]);
+  const live = !!G && started && !over && !RV && !gym && !recd;
+  $('cBot').classList.toggle('on', live && G.turn() === bot);
+  $('cMe').classList.toggle('on', live && G.turn() === human);
+  $('cMe').classList.toggle('low', live && clocks[human] < 10000);         // red clock under 10 seconds
+}
+function setStatus(t) { $('status').textContent = t; }
+function log(t) {
+  const el = $('log'), p = document.createElement('p'); p.textContent = t; el.prepend(p);
+  while (el.children.length > 30) el.lastChild.remove();   // bounded: no unbounded DOM growth in long sessions
+}
+
+function render() {
+  const v = V(), show = showA(), i = v.ply - 1;
+  paint(v, show); renderClocks(); renderMoves(v, show);
+  setEvalBar(show ? (i >= 0 ? Number(v.evals[i]) || 0 : 0) : null, v.flip);   // hidden (locked) during a live game
+  const k = show && i >= 0 && okLabel(v.labels[i]) ? v.labels[i] : null, lb = $('lastBadge');
+  lb.textContent = k ? ((i % 2 === 0 ? 'w' : 'b') === v.human ? 'You: ' : 'Bot: ') + BADGES[k].name : '';
+  if (k) lb.style.background = BADGES[k].c;
+  $('moves').classList.toggle('rv', !!RV);
+  $('reviewBar').hidden = !RV;
+  if (RV) {
+    $('rvInfo').textContent = `Move ${RV.ply} / ${RV.sans.length}`;
+    $('rvPrev').disabled = RV.ply === 0; $('rvNext').disabled = RV.ply >= RV.sans.length;
+  }
+  const live = started && !over;
+  $('hist').classList.toggle('locked', live);                                // no review while a live game is running
+  $('resign').disabled = !G || !started || over || !!RV || !!gym || !!recd;
+  $('gymBtn').disabled = !gymList.length || live || !!recd;
+  $('tabVlt').disabled = live; $('tabVlt').title = live ? 'Finish or resign the current game first' : 'Opening Vault';
+  $('trainInfo').textContent = trainInfoText(); $('drillInfo').textContent = drillInfoText();
+  renderGauntlet();
+  $('brain').textContent = `Games learned from: ${meta.games}.` + (show ? ` Brain's view of this position: ${nnEval(boardOf(v.g)).toFixed(2)} (+ favours White).` : '');
+}
+
+/* =========================================================
+   13. SETUP (mode tabs, side, opening, drill, aids), SLIDERS, BUTTONS
+   All listeners are bound once; the lists use event delegation.
+   ========================================================= */
+function trainInfoText() {
+  const T = trainer();
+  if (ui.opening === ALL) {
+    if (T && cfg.gauntlet && gauntlet) {
+      const n = Math.min(sans.length, T.moves.length);
+      return `Opening ${gauntlet.idx + 1}/${gauntlet.queue.length}: ${T.name}. You play ${human === 'w' ? 'White' : 'Black'}. ${T.description} Book ${n}/${T.moves.length}.`;
+    }
+    return `Drills all ${allOpenings().length} openings (built-in and yours) in random order and flips the board for you. Starts with the next new game.`;
+  }
+  const S = findOpening(ui.opening);
+  if (!S) return '';
+  if (T && T === S) {                                      // the active game drills the selected opening: show progress
+    const n = Math.min(sans.length, T.moves.length);
+    return `You play ${human === 'w' ? 'White' : 'Black'}. ${T.description} Book progress: ${n}/${T.moves.length}` + (n >= T.moves.length ? ' (complete, the adaptive brain plays on).' : '.');
+  }
+  return `You play ${S.side === 'w' ? 'White' : 'Black'}. ${S.description} The bot answers with strict book moves; off-book moves bounce back so you can retry. Starts with the next new game.`;
+}
+function drillInfoText() {
+  const D = DRILLS[ui.drill];
+  return `${D.note} Goal: ${D.goal === 'mate' ? 'checkmate' : 'promote the pawn'} within ${D.time / 1000} s. You play White.`;
+}
+
+const TABS = [['tabStd', 'standard'], ['tabTrn', 'trainer'], ['tabDrl', 'drill']];
+function renderOpeningSelect() {                           // dropdown: Practice All + every opening grouped by the colour you play
+  const all = allOpenings(), opt = o => `<option value="${esc(o.id)}">${o.custom ? '\u2605 ' : ''}${esc(o.name)}</option>`;
+  const grp = (label, side) => `<optgroup label="${label}">${all.filter(o => o.side === side).map(opt).join('')}</optgroup>`;
+  $('opening').innerHTML = `<option value="${ALL}">\uD83C\uDFB2 Practice All Openings (T\u1ED5ng h\u1EE3p / Ng\u1EABu nhi\u00EAn)</option>` + grp('Play as White', 'w') + grp('Play as Black', 'b');
+  $('opening').value = ui.opening;
+}
+function syncSetup() {                                     // reflect `ui` in the controls
+  TABS.forEach(([id, k]) => $(id).setAttribute('aria-selected', String(ui.mode === k)));
+  $('sideBox').hidden = ui.mode !== 'standard'; $('trainBox').hidden = ui.mode !== 'trainer'; $('drillBox').hidden = ui.mode !== 'drill';
+  document.querySelectorAll('input[name=side]').forEach(r => { r.checked = r.value === ui.pref; });
+  $('opening').value = ui.opening; $('drill').value = ui.drill; $('gAuto').checked = ui.autoNext; $('pChk').checked = ui.pressure;
+  $('radar').checked = ui.radar; $('handi').checked = ui.handicap; $('snd').checked = soundOn;
+  $('trainInfo').textContent = trainInfoText(); $('drillInfo').textContent = drillInfoText();
+  renderGauntlet();
+}
+
+function applySetup() {                                    // a setup control changed
+  store(SETUP_KEY, ui); syncSetup();
+  if (G && !started && !RV && !gym && !recd) newGame();                     // nothing played yet: apply at once (the board flips immediately)
+  else if (G) log('Setup changes apply to the next new game.');
+}
+TABS.forEach(([id, k]) => { $(id).onclick = () => { if (ui.mode !== k) { ui.mode = k; applySetup(); } }; });
+$('seg').addEventListener('change', e => { if (e.target.name === 'side') { ui.pref = e.target.value; applySetup(); } });
+$('opening').onchange = e => { ui.opening = e.target.value; applySetup(); };
+$('drill').onchange = e => { ui.drill = e.target.value; applySetup(); };
+$('radar').onchange = e => { ui.radar = e.target.checked; store(SETUP_KEY, ui); if (G) draw(); };     // takes effect at once
+$('handi').onchange = e => { ui.handicap = e.target.checked; store(SETUP_KEY, ui); };
+$('snd').onchange = e => { soundOn = e.target.checked; store(SOUND_KEY, soundOn ? '1' : '0'); if (soundOn) sfx('move'); };
+
+function syncSliders() {                                   // slider values -> P (+ labels) and persist them
+  P.aggr = ui.aggr = +$('aggr').value; P.nodes = ui.nodes = +$('nodes').value; ui.lr = +$('lr').value; P.lr = ui.lr / 2000;   // lr range 0.0005 .. 0.05
+  $('vAggr').textContent = P.aggr; $('vNodes').textContent = P.nodes; $('vLr').textContent = P.lr.toFixed(4);
+  store(SETUP_KEY, ui);
+}
+['aggr', 'nodes', 'lr'].forEach(id => $(id).addEventListener('input', syncSliders));
+
+$('newGame').onclick = () => { if (G) newGame(); };
+$('resign').onclick = () => { if (G && started && !over && !RV) finish(-1, 'Resignation'); };
+$('rvPrev').onclick = () => RV && gotoPly(RV.ply - 1);
+$('rvNext').onclick = () => RV && gotoPly(RV.ply + 1);
+$('rvBack').onclick = () => { if (G) newGame(); };         // unfreezes the engine and starts a fresh live game
+$('hist').addEventListener('click', e => {
+  const b = e.target.closest('button[data-id]');
+  if (b) enterReview(+b.dataset.id);
+});
+$('moves').addEventListener('click', e => {
+  const m = RV && e.target.closest('[data-ply]');
+  if (m) gotoPly(+m.dataset.ply);
+});
+$('exportBrain').onclick = exportBrain;
+$('importBrain').onclick = () => $('impFile').click();
+$('impFile').onchange = e => { const files = Array.from(e.target.files || []); e.target.value = ''; importBrain(files); };
+
+let resetArmed = 0;
+$('resetBrain').onclick = async () => {
+  const btn = $('resetBrain');
+  if (!window.tf || training) return;
+  if (Date.now() - resetArmed > 3000) {                    // two-step confirm: a mis-click must not wipe the brain
+    resetArmed = Date.now(); btn.textContent = 'Sure?';
+    setTimeout(() => { btn.textContent = 'Reset Brain'; }, 3000);
+    return;
+  }
+  resetArmed = 0; btn.textContent = 'Reset Brain';
+  try {
+    const models = await tf.io.listModels();
+    if (models[MODEL_KEY]) await tf.io.removeModel(MODEL_KEY);
+  } catch (e) { log('Brain reset failed: ' + e.message); return; }
+  replayBuffer = [];
+  try { localStorage.removeItem(REPLAY_KEY); } catch (e) { log('Replay buffer reset failed: ' + e.message); }
+  const old = model; model = buildModel(); refreshWeights(); if (old) old.dispose();
+  meta.games = 0; tele = cleanTele(null); store(META_KEY, meta); store(TELE_KEY, tele); renderTele();
+  log('Brain reset to a fresh network.');
+  if (G) { curNN = nnEval(boardOf(G)); render(); }
+};
+
+/* =========================================================
+   14. PRACTICE ALL OPENINGS (gauntlet) + OPENING VAULT (Kho Khai Cuộc)
+   ========================================================= */
+function toast(t) {                                        // short celebratory message at the bottom of the screen
+  const el = $('toast'); el.textContent = t; el.classList.add('on');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('on'), 2800);
+}
+
+function startGauntlet() {                                 // shuffle every built-in and custom opening into a practice queue
+  const ids = allOpenings().map(o => o.id);
+  for (let i = ids.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [ids[i], ids[j]] = [ids[j], ids[i]]; }   // Fisher-Yates
+  gauntlet = { queue: ids, idx: 0, mastered: 0, streak: 0, errs: 0 };
+}
+function nextPlayable() {                                  // make sure the queue points at an opening that still exists
+  if (!gauntlet || gauntlet.idx >= gauntlet.queue.length) startGauntlet();
+  while (gauntlet.idx < gauntlet.queue.length && !findOpening(gauntlet.queue[gauntlet.idx])) gauntlet.idx++;
+  if (gauntlet.idx >= gauntlet.queue.length) startGauntlet();
+}
+function advanceGauntlet() {                               // "Next Opening": next queue entry (a fresh shuffle after the last one)
+  clearTimeout(gTimer);
+  if (!gauntlet || ui.mode !== 'trainer' || ui.opening !== ALL || busy) return;
+  gauntlet.idx++; gauntlet.errs = 0;
+  newGame();
+}
+
+// You played the whole book line: freeze quietly (no analysis reveal, nothing saved), count it as mastered when you made
+// no off-book attempt, celebrate, and move on (auto after 1.5 s, or with the Next Opening button).
+function completeOpening(T) {
+  over = true; quiet = true; thinking = false; sel = null; legal = []; pre = null; warn = null;
+  const g = gauntlet, clean = g.errs === 0, last = g.idx + 1 >= g.queue.length;
+  if (clean) { g.mastered++; g.streak++; } else g.streak = 0;
+  const msg = clean ? `\uD83C\uDF89 \u0110\u00E3 thu\u1ED9c: ${T.name}! (${g.mastered}/${g.queue.length} khai cu\u1ED9c)`
+                    : `${T.name} finished with ${g.errs} slip(s): not counted as mastered yet.`;
+  toast(msg); log(msg); sfx('check');
+  say(clean ? `Perfect recall of the ${T.name}. ${T.description}` : `Done, but you needed retries. Come back to the ${T.name} later.`);
+  setStatus(clean ? 'Opening mastered!' : 'Opening finished (with slips).');
+  if (last) { const s = `Gauntlet complete: ${g.mastered}/${g.queue.length} openings mastered. Next Opening starts a new shuffle.`; log(s); setTimeout(() => toast(s), 2900); }
+  else if (ui.autoNext) gTimer = setTimeout(advanceGauntlet, 1500);
+  renderGauntlet();
+}
+
+function renderGauntlet() {                                // progress counter ("Đã thuộc: 4/19 khai cuộc") + bar + buttons
+  const on = ui.mode === 'trainer' && ui.opening === ALL;
+  $('gBox').hidden = !on;
+  if (!on) return;
+  const g = gauntlet, total = g ? g.queue.length : allOpenings().length, m = g ? g.mastered : 0;
+  $('gProg').textContent = `\u0110\u00E3 thu\u1ED9c: ${m}/${total} khai cu\u1ED9c` + (g && g.streak > 1 ? ` \u00b7 Chu\u1ED7i: ${g.streak}` : '');
+  $('gBar').style.width = (total ? 100 * m / total : 0) + '%';
+  $('gNext').disabled = !g;                                // advanceGauntlet() itself ignores clicks during the few-ms busy window
+}
+$('gNext').onclick = advanceGauntlet;
+$('gShuf').onclick = () => { clearTimeout(gTimer); startGauntlet(); if (ui.mode === 'trainer' && ui.opening === ALL && !(started && !over)) newGame(); else renderGauntlet(); };
+$('gAuto').onchange = e => { ui.autoNext = e.target.checked; store(SETUP_KEY, ui); };
+
+let vaultFilter = 'all';
+const fmtLine = o => o.moves.map((m, i) => (i % 2 ? '' : (i / 2 + 1) + '.') + m).join(' ');
+const catTag = o => `${o.side === 'w' ? '\u2654 White' : '\u265A Black'} \u00b7 ${o.custom ? 'Custom' : o.category}`;
+
+function renderVault() {
+  document.querySelectorAll('#vFilters button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.f === vaultFilter)));
+  const f = vaultFilter, list = allOpenings().filter(o => f === 'all' ? true : f === 'custom' ? !!o.custom : !o.custom && o.side === f && o.category !== 'Opening');
+  $('vGrid').innerHTML = list.length ? list.map(o =>
+    `<article class="card"><header><b>${esc(o.name)}</b><span class="tag">${catTag(o)}</span></header>` +
+    `<code>${esc(fmtLine(o))}</code><p>${esc(o.description)}</p>` +
+    `<div class="row"><button data-practice="${esc(o.id)}">Luy\u1EC7n t\u1EADp ngay (Practice This)</button>` +
+    (o.custom ? `<button class="ghost" data-del="${esc(o.id)}">Delete</button>` : '') + `</div></article>`).join('')
+    : '<p class="sub">Nothing here yet. Add your own opening below.</p>';
+  $('vCount').textContent = `${list.length} / ${allOpenings().length}`;
+}
+function openVault() {
+  if (started && !over) { log('Finish or resign the current game before opening the Vault.'); return; }
+  $('vault').hidden = false; renderVault(); $('vClose').focus();
+}
+function closeVault() { $('vault').hidden = true; $('tabVlt').focus(); }
+
+function practiceOpening(id) {                             // "Practice This": load exactly this opening onto the main board
+  if (!findOpening(id)) return;
+  ui.mode = 'trainer'; ui.opening = id; store(SETUP_KEY, ui);
+  closeVault(); newGame();
+}
+
+function persistCustom() {
+  try {
+    localStorage.setItem(CUSTOM_KEY, JSON.stringify(customOps.map(o => ({ id: o.id, name: o.name, side: o.side, moves: o.moves, description: o.description }))));
+    return true;
+  } catch (e) { return false; }
+}
+function setCErr(msg, ok) { const el = $('cErr'); el.textContent = msg; el.className = ok ? 'ok' : 'bad'; }
+
+function addCustom(name, side, note, text) {               // shared by the form and the board recorder; returns '' or an error message
+  const p = parseMoves(text);
+  const err = !name ? 'Give the opening a name.' : name.length > 40 ? 'Name: 40 characters max.'
+    : customOps.length >= MAX_CUSTOM ? `Limit reached (${MAX_CUSTOM} custom openings). Delete one first.` : p.err || '';
+  if (err) return err;
+  customOps.push({ id: 'c' + Date.now(), name, category: 'Custom', side, moves: p.moves, description: note.slice(0, 160) || 'Your own line.', custom: true });
+  if (!persistCustom()) { customOps.pop(); return 'Could not save: browser storage is full or blocked.'; }
+  renderOpeningSelect(); syncSetup();
+  return '';
+}
+function saveCustomOpening() {                             // the manual form: validate with a temporary Chess instance, then store
+  const err = addCustom($('cName').value.trim(), $('cSide').value, $('cNote').value.trim(), $('cMoves').value);
+  if (err) { setCErr(err, false); return; }
+  const n = customOps[customOps.length - 1];
+  ['cName', 'cMoves', 'cNote'].forEach(id => { $(id).value = ''; });
+  setCErr(`Saved "${n.name}" (${n.moves.length} ply).`, true);
+  vaultFilter = 'custom'; renderVault();
+}
+function deleteCustom(id) {
+  customOps = customOps.filter(o => o.id !== id); persistCustom();
+  if (ui.opening === id) { ui.opening = 'italian'; store(SETUP_KEY, ui); }
+  renderOpeningSelect(); syncSetup(); renderVault();
+}
+
+$('tabVlt').onclick = openVault;
+$('vClose').onclick = closeVault;
+$('vault').addEventListener('click', e => { if (e.target === $('vault')) closeVault(); });
+$('vFilters').addEventListener('click', e => { const b = e.target.closest('button[data-f]'); if (b) { vaultFilter = b.dataset.f; renderVault(); } });
+$('vGrid').addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.dataset.practice) practiceOpening(b.dataset.practice);
+  else if (b.dataset.del) deleteCustom(b.dataset.del);
+});
+$('cAdd').onclick = saveCustomOpening;
+$('cMoves').addEventListener('input', e => {              // live validation while typing
+  const v = e.target.value.trim();
+  if (!v) { setCErr('', true); return; }
+  const p = parseMoves(v);
+  p.err ? setCErr(p.err, false) : setCErr(`\u2713 ${p.moves.length} ply: ${p.moves.join(' ')}`, true);
+});
+
+/* =========================================================
+   15. MOVE PRESSURE (2.5 s reflex drill), BOARD RECORDER, PERSONAL BLUNDER GYM
+   ========================================================= */
+const PRESSURE_MS = 2500;
+
+// --- Move pressure: during an Opening Trainer / gauntlet line YOU must move within 2.5 s on every turn ---
+function pressureActive() {
+  const T = trainer();
+  return !!(ui.pressure && T && G && !over && !busy && !RV && !gym && !recd && !thinking && G.turn() === human && sans.length < T.moves.length && $('vault').hidden);
+}
+function pressureTick() {                                  // runs every 100 ms from the clock interval
+  const box = $('pressure'), bar = $('pBar'), txt = $('pTxt'), show = ui.pressure && ui.mode === 'trainer';
+  box.hidden = !show;
+  if (!show) return;
+  if (!pressureActive()) { pKey = ''; bar.style.width = '100%'; bar.style.background = 'var(--line)'; txt.textContent = 'waiting'; return; }
+  const now = performance.now(), key = gid + ':' + sans.length;
+  if (key !== pKey) { pKey = key; pStart = now; }          // a new human turn: the countdown restarts at 2.5 s
+  const left = PRESSURE_MS - (now - pStart);
+  if (left <= 0) { tooSlow(); return; }
+  const f = left / PRESSURE_MS;
+  bar.style.width = (f * 100).toFixed(1) + '%';
+  bar.style.background = f > 0.5 ? 'var(--accent)' : f > 0.25 ? '#f0a020' : '#e5483c';
+  txt.textContent = (left / 1000).toFixed(1) + ' s';
+}
+function tooSlow() {
+  pStart = performance.now();                              // reset the timer for an immediate retry
+  if (cfg.gauntlet && gauntlet) gauntlet.errs++;           // too slow = not mastered in the gauntlet
+  sfx('slow'); grid.classList.add('slow'); clearTimeout(slowTimer); slowTimer = setTimeout(() => grid.classList.remove('slow'), 700);
+  say('⏱️ Quá chậm! Trong cờ 3 phút cần đi theo phản xạ dưới 2.5s');
+  setStatus('Too slow! Move within 2.5 s.'); renderGauntlet();
+}
+$('pChk').onchange = e => { ui.pressure = e.target.checked; store(SETUP_KEY, ui); pKey = ''; pressureTick(); };
+
+function leaveSpecial() {                                  // leave the recorder / gym (called by newGame and review)
+  clearTimeout(gymTimer); clearTimeout(gymFlashTimer);
+  gym = null; recd = null; gymFlash = null;
+  $('gymBar').hidden = true; $('recBar').hidden = true;
+}
+
+// --- Interactive board recorder: free-move sandbox that writes the SAN into the Vault form ---
+function startRecording() {
+  if (started && !over) { log('Finish or resign the current game first.'); return; }
+  const side = $('cSide').value, name = $('cName').value;
+  leaveSpecial(); clearTimeout(gTimer); gid++; thinking = false; RV = null; sel = null; legal = []; pre = null; warn = null;
+  recd = { g: new Chess(), sans: [], last: null, flip: side === 'b' };      // starting position, both colours movable
+  $('rName').value = name; $('rSide').value = side; $('rLine').value = ''; $('cMoves').value = '';
+  $('vault').hidden = true;                                // the board must be visible; the Vault returns when you stop
+  $('recBar').hidden = false;
+  say('Recording: play the line for BOTH sides. Every move is written down for you.'); setStatus('Recording a custom opening...');
+  render();
+}
+function recSync() { const line = recd.sans.join(' '); $('rLine').value = line; $('cMoves').value = line; render(); }
+function recClick(sq) {
+  const g = recd.g, mv = sel && legal.find(m => m.to === sq && (!m.promotion || m.promotion === 'q'));
+  if (mv) {
+    if (recd.sans.length >= 20) { toast('20 ply is the maximum for a custom opening.'); return; }
+    const m = g.move({ from: mv.from, to: mv.to, promotion: 'q' });
+    recd.sans.push(m.san); recd.last = m; sel = null; legal = [];
+    sfx(m.captured ? 'capture' : 'move'); if (inCheck(g)) sfx('check');
+    recSync(); return;
+  }
+  const p = g.get(sq);
+  if (p && p.color === g.turn()) { sel = sq; legal = g.moves({ square: sq, verbose: true }); } else { sel = null; legal = []; }
+  draw();
+}
+function recUndo() {
+  if (!recd || !recd.sans.length) return;
+  recd.g.undo(); recd.sans.pop();
+  const h = recd.g.history({ verbose: true }); recd.last = h[h.length - 1] || null;
+  sel = null; legal = []; recSync();
+}
+function stopRecording(save) {
+  if (!recd) return;
+  if (save) {
+    const err = addCustom($('rName').value.trim(), $('rSide').value, $('cNote').value.trim(), recd.sans.join(' '));
+    if (err) { say(err); toast(err); return; }             // stay in the recorder: nothing is lost
+    toast(`Saved "${customOps[customOps.length - 1].name}" (${recd.sans.length} ply)`);
+    ['cName', 'cMoves', 'cNote'].forEach(id => { $(id).value = ''; });
+    vaultFilter = 'custom';
+  }
+  newGame();                                               // leaves the sandbox and restores a normal game
+  openVault();
+}
+$('cRec').onclick = startRecording;
+$('rUndo').onclick = recUndo;
+$('rSave').onclick = () => stopRecording(true);
+$('rCancel').onclick = () => stopRecording(false);
+
+// --- Personal Blunder Gym: replay the positions right before YOUR Mistake / Blunder in the saved games ---
+function buildGym() {
+  const out = [];
+  for (const h of hist) {
+    const g = newChess(h.start), mine = h.side === 'w' ? 0 : 1;
+    for (let i = 0; i < h.pgn.length; i++) {
+      const fen = g.fen(), m = g.move(h.pgn[i]);
+      if (!m) break;
+      const k = h.labels[i];
+      if (i % 2 === mine && (k === 'blunder' || k === 'mistake')) out.push({ fen, side: h.side, bad: strip(m.san), label: k, game: h.id, ply: i + 1 });
+    }
+  }
+  out.sort((a, b) => (a.label === 'blunder' ? 0 : 1) - (b.label === 'blunder' ? 0 : 1));   // blunders first (stable sort keeps newest games first)
+  return out.slice(0, 40);
+}
+function refreshGym() { gymList = buildGym(); $('gymBadge').textContent = gymList.length; }
+
+function enterGym() {
+  if (!gymList.length || (started && !over) || busy) return;
+  leaveSpecial(); clearTimeout(gTimer); gid++; thinking = false; RV = null; pre = null; warn = null; $('vault').hidden = true;
+  gym = { list: gymList.slice(), idx: 0, fixed: 0, g: null, last: null, side: 'w', lock: false, done: false };
+  loadPuzzle();
+}
+function loadPuzzle() {
+  const p = gym.list[gym.idx];
+  gym.g = new Chess(p.fen); gym.side = p.side; gym.last = null; gym.lock = false; sel = null; legal = []; gymFlash = null;   // clocks stay frozen (no game is running)
+  $('gymBar').hidden = false;
+  $('gymInfo').textContent = `Puzzle ${gym.idx + 1}/${gym.list.length} · ${p.label === 'blunder' ? 'Blunder ??' : 'Mistake ?'} · solved ${gym.fixed}`;
+  say('Tìm nước đi chuẩn xác để tránh sai lầm cũ!');
+  setStatus(`Gym ${gym.idx + 1}/${gym.list.length}: you are ${p.side === 'w' ? 'White' : 'Black'}. Find a better move.`);
+  render();
+}
+function gymClick(sq) {
+  if (!gym || gym.done || gym.lock) return;
+  const g = gym.g, mv = sel && legal.find(m => m.to === sq && (!m.promotion || m.promotion === 'q'));
+  if (mv) { gymTry(mv, gym.list[gym.idx]); return; }
+  const p = g.get(sq);
+  if (p && p.color === gym.side) { sel = sq; legal = g.moves({ square: sq, verbose: true }); } else { sel = null; legal = []; }
+  draw();
+}
+// Hybrid evaluation (handcrafted terms + TensorFlow.js network, after quiescence): the move passes if it loses less than
+// 0.5 pawns compared with the engine's best move AND it is not the old mistake again.
+function gymTry(mv, p) {
+  const same = strip(mv.san) === p.bad, a = analyzeMove(gym.g.fen(), mv), drop = Math.max(0, (a.best - a.played) / 100);
+  clearTimeout(gymFlashTimer);
+  if (!same && drop < 0.5) {                               // avoided the old mistake: green, then the next puzzle
+    gym.last = gym.g.move({ from: mv.from, to: mv.to, promotion: mv.promotion || 'q' }); gym.fixed++; gym.lock = true;
+    gymFlash = { from: mv.from, to: mv.to, kind: 'ok' }; sel = null; legal = [];
+    sfx('check'); toast('✓ Chuẩn xác! Đã sửa lỗi cũ.'); say(`Chuẩn xác! Chỉ kém nước tốt nhất ${drop.toFixed(2)} điểm.`);
+    render(); gymTimer = setTimeout(gymNext, 1200);
+  } else {                                                 // repeated or bad move: red, the piece stays selected for a retry
+    gymFlash = { from: mv.from, to: mv.to, kind: 'bad' }; sfx('warn');
+    say(same ? 'Bạn lặp lại đúng nước sai cũ! Thử nước khác.' : `Chưa ổn: nước này kém nước tốt nhất ${drop.toFixed(1)} điểm. Thử lại!`);
+    draw(); gymFlashTimer = setTimeout(() => { if (gym && gymFlash && gymFlash.kind === 'bad') { gymFlash = null; draw(); } }, 1000);
+  }
+}
+function gymNext() {
+  if (!gym) return;
+  clearTimeout(gymTimer); gym.idx++;
+  if (gym.idx >= gym.list.length) {
+    gym.done = true; gymFlash = null; sel = null; legal = [];
+    const msg = `Hoàn thành! Đã sửa ${gym.fixed}/${gym.list.length} lỗi.`;
+    $('gymInfo').textContent = msg; toast(msg); say(msg + ' Bấm Exit Gym để chơi tiếp.'); render(); return;
+  }
+  loadPuzzle();
+}
+function exitGym() { newGame(); }                          // newGame() leaves the gym and restores normal play
+$('gymBtn').onclick = enterGym;
+$('gymSkip').onclick = () => { if (gym && !gym.done) gymNext(); };
+$('gymExit').onclick = exitGym;
+
+(async function init() {
+  $('aggr').value = ui.aggr; $('nodes').value = ui.nodes; $('lr').value = ui.lr; syncSliders(); renderOpeningSelect(); syncSetup();
+  hist = loadHist(); renderHist(); renderTele(); refreshGym();
+  if (typeof tf === 'undefined' || typeof Chess === 'undefined') {
+    setStatus('Could not load TensorFlow.js or chess.js. Check your internet connection and reload.');
+    return;
+  }
+  await tf.ready();
+  let m = null;
+  try { m = await tf.loadLayersModel(MODEL_KEY); if (!compatible(m)) { m.dispose(); m = null; } } catch (e) { m = null; }
+  if (m) {
+    model = m;
+    model.compile({ optimizer: tf.train.adam(P.lr), loss: 'meanSquaredError' });
+    log('Đã khôi phục trí nhớ AI tự động!');
+  } else { model = buildModel(); log('Created a fresh brain.'); }
+  refreshWeights(); verifyForward();
+  newGame();
+})();
+</script>
+</body>
+</html>
